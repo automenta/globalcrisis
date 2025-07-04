@@ -1,5 +1,10 @@
 import { GameEngine, GameState, PlayerState } from './GameEngine';
-import { FacilityType, FACILITY_DEFINITIONS } from './definitions';
+import {
+    FacilityType, FACILITY_DEFINITIONS,
+    StrategicResourceType, // Though not directly used in this diff, good to have for context
+    REGIONAL_DEVELOPMENT_PROGRAM_DEFINITIONS, RegionalDevelopmentProgramType,
+    POLICY_DEFINITIONS, PolicyType
+} from './definitions';
 import { TECH_TREE, TechNode } from './Technology';
 
 export class AIPlayer {
@@ -39,14 +44,14 @@ export class AIPlayer {
             currentGameState = this.tryBuildFacility(currentGameState, playerState, FacilityType.RESOURCE_EXTRACTOR);
         }
 
-        // Energy management: Build power plants if energy is low or negative (simplistic check)
-        // A more robust check would sum potential energy production vs consumption.
+        // Energy management: Build power plants if energy is low or negative.
         const currentEnergy = playerState.globalResources.energy || 0;
+        const energyProduction = this.calculateNetResourceChange(playerState, 'energy', currentGameState);
         const powerPlants = playerState.activeFacilities.filter(f => f.type === FacilityType.POWER_PLANT).length;
-        // Target having at least some positive net energy or a minimum number of power plants if very low.
-        // This heuristic is very basic: if energy is below a threshold and we have few power plants, build one.
-        if (currentEnergy < 100 && powerPlants < 2) { // Thresholds can be tuned
-             this.log(`Low energy (${currentEnergy}), considering Power Plant. Have ${powerPlants}.`);
+
+        // If energy is low AND net production is low/negative, or if very few power plants exist.
+        if ((currentEnergy < 100 && energyProduction < 5) || powerPlants < 1) { // Thresholds can be tuned
+             this.log(`Energy status: current ${currentEnergy}, net prod ${energyProduction.toFixed(2)}. Considering Power Plant. Have ${powerPlants}.`);
              currentGameState = this.tryBuildFacility(currentGameState, playerState, FacilityType.POWER_PLANT);
         }
 
@@ -86,19 +91,32 @@ export class AIPlayer {
         // More decisions can be added here:
         // - Respond to threats
         // - Military buildup
-        // - Strategic resource acquisition
+
+        // 3. Strategic Resource Acquisition
+        currentGameState = this.tryAcquireStrategicResources(currentGameState, playerState);
+
+        // 4. Consider Regional Development Programs (very basic)
+        if (Math.random() < 0.01) { // Low chance each decision cycle to consider this
+            currentGameState = this.tryRegionalDevelopmentProgram(currentGameState, playerState);
+        }
+
+        // 5. Consider Enacting a Policy (very basic)
+        if (Math.random() < 0.01) { // Low chance each decision cycle
+            currentGameState = this.tryEnactPolicy(currentGameState, playerState);
+        }
 
         return currentGameState;
     }
 
-    private tryBuildFacility(gameState: GameState, playerState: PlayerState, facilityType: FacilityType): GameState {
+    private tryBuildFacility(gameState: GameState, playerState: PlayerState, facilityType: FacilityType, targetRegionId?: string, targetHexagonId?: string): GameState {
         const definition = FACILITY_DEFINITIONS[facilityType];
         if (!definition) return gameState;
 
         // Check affordability
         let canAfford = true;
-        for (const resource in definition.cost) {
-            if ((playerState.globalResources[resource] || 0) < definition.cost[resource]) {
+        const costs = definition.cost || {};
+        for (const resource in costs) {
+            if ((playerState.globalResources[resource] || 0) < costs[resource as keyof typeof costs]) {
                 canAfford = false;
                 break;
             }
@@ -109,22 +127,199 @@ export class AIPlayer {
             return gameState;
         }
 
-        // Find a random region to build in (simplistic)
-        // A better AI would pick regions strategically.
-        const randomRegionIndex = Math.floor(Math.random() * gameState.regions.length);
-        const targetRegion = gameState.regions[randomRegionIndex];
-
-        if (targetRegion) {
-            this.log(`Attempting to build ${definition.name} in ${targetRegion.name}`);
-            // For facilities requiring specific hexes (like STRATEGIC_RESOURCE_NODE), this needs more logic.
-            // For now, assume general facilities.
-            const buildResult = this.gameEngine.buildFacility(gameState, facilityType, targetRegion.id, this.id, undefined);
-            if (buildResult.success && buildResult.newState) {
-                this.log(`Successfully started construction of ${definition.name} in ${targetRegion.name}.`);
-                return buildResult.newState;
-            } else {
-                // this.log(`Failed to build ${definition.name} in ${targetRegion.name}: ${buildResult.message}`);
+        let buildRegionId = targetRegionId;
+        if (!buildRegionId) {
+            // If no specific region, pick one somewhat randomly but try to find one that makes sense for the facility
+            // For STRATEGIC_RESOURCE_NODE, region is determined by hexagon.
+            // For others, could be random or based on some regional need.
+            if (facilityType !== FacilityType.STRATEGIC_RESOURCE_NODE || !targetHexagonId) {
+                 const randomRegionIndex = Math.floor(Math.random() * gameState.regions.length);
+                 buildRegionId = gameState.regions[randomRegionIndex].id;
+            } else if (targetHexagonId) {
+                // For STRATEGIC_RESOURCE_NODE, find which region the hexagon falls into.
+                // This is a simplification; hexes aren't directly tied to regions in current model.
+                // AI will pick a region that owns the hex or is nearby. For now, pick any region.
+                // TODO: Enhance this logic if hexes get explicit region ownership or proximity data.
+                const randomRegionIndex = Math.floor(Math.random() * gameState.regions.length);
+                buildRegionId = gameState.regions[randomRegionIndex].id;
+                // A better approach would be to find the region containing or closest to the targetHexagonId.
+                // This requires a mapping from hexagonId to regionId or coordinates.
             }
+        }
+
+        if (!buildRegionId) {
+            this.log(`Could not determine a target region for ${definition.name}.`);
+            return gameState;
+        }
+        const regionName = gameState.regions.find(r => r.id === buildRegionId)?.name || "Unknown Region";
+
+        this.log(`Attempting to build ${definition.name} in ${regionName}` + (targetHexagonId ? ` on hex ${targetHexagonId}` : ""));
+
+        const buildResult = this.gameEngine.buildFacility(gameState, facilityType, buildRegionId, this.id, targetHexagonId);
+        if (buildResult.success && buildResult.newState) {
+            this.log(`Successfully started construction of ${definition.name}.`);
+            return buildResult.newState;
+        } else {
+            // this.log(`Failed to build ${definition.name}: ${buildResult.message}`);
+        }
+        return gameState;
+    }
+
+    private tryAcquireStrategicResources(gameState: GameState, playerState: PlayerState): GameState {
+        let newState = { ...gameState };
+        const scannedHexesWithResources: { hexId: string, resource: NonNullable<typeof gameState.hexagonStrategicResources[string]> }[] = [];
+
+        playerState.scannedHexes.forEach(hexId => {
+            const resource = gameState.hexagonStrategicResources[hexId];
+            if (resource) {
+                // Check if a node already exists (by any player)
+                let nodeExists = false;
+                for (const pId in gameState.players) {
+                    if (gameState.players[pId].activeFacilities.some(f => f.hexagonId === hexId && f.type === FacilityType.STRATEGIC_RESOURCE_NODE)) {
+                        nodeExists = true;
+                        break;
+                    }
+                }
+                if (!nodeExists) {
+                    scannedHexesWithResources.push({ hexId, resource });
+                }
+            }
+        });
+
+        if (scannedHexesWithResources.length === 0) {
+            return newState; // No available hexes with resources to build on
+        }
+
+        // Prioritize resources the AI is low on or needs for tech/upgrades (simplified for now)
+        // Simple heuristic: build on the first available one if affordable
+        for (const { hexId, resource } of scannedHexesWithResources) {
+            // Check if AI is "low" on this resource or if it's generally valuable
+            const currentAmount = playerState.globalResources[resource] || 0;
+            const netChange = this.calculateNetResourceChange(playerState, resource, gameState);
+
+            // Example condition: if low quantity and not producing much, or if it's a new resource type for the AI
+            if (currentAmount < 10 && netChange < 0.1) {
+                this.log(`Considering building Strategic Resource Node on ${hexId} for ${resource}. Current: ${currentAmount}, NetChange: ${netChange.toFixed(2)}`);
+                // The region for building STRATEGIC_RESOURCE_NODE is not directly tied to hex in buildFacility call.
+                // We need to determine a region. For AI, this can be a region it "focuses" on or a random one.
+                // This is a simplification. Ideally, hexes would belong to regions or have clear proximity.
+                const randomRegion = gameState.regions[Math.floor(Math.random() * gameState.regions.length)];
+                newState = this.tryBuildFacility(newState, playerState, FacilityType.STRATEGIC_RESOURCE_NODE, randomRegion.id, hexId);
+                // If a build was attempted (successfully or not), break for this decision cycle to avoid multiple builds at once
+                if (newState !== gameState) break;
+            }
+        }
+        return newState;
+    }
+
+    private calculateNetResourceChange(playerState: PlayerState, resourceName: string, gameState: GameState): number {
+        let netChange = 0;
+
+        playerState.activeFacilities.forEach(facility => {
+            if (!facility.operational) return;
+
+            const definition = FACILITY_DEFINITIONS[facility.type];
+            if (!definition) return;
+
+            // Add income from facility effects
+            if (definition.effects) {
+                definition.effects.forEach(effect => {
+                    if (effect.resourceYield && effect.resourceYield[resourceName]) {
+                        netChange += effect.resourceYield[resourceName]!;
+                    }
+                });
+            }
+
+            // Subtract upkeep from facility maintenance costs
+            if (definition.maintenanceCost && definition.maintenanceCost[resourceName]) {
+                netChange -= definition.maintenanceCost[resourceName]!;
+            }
+
+            // Special case for strategic resource nodes (if the resourceName matches the hex output)
+            if (facility.type === FacilityType.STRATEGIC_RESOURCE_NODE && facility.hexagonId) {
+                const resourceOnHex = gameState.hexagonStrategicResources[facility.hexagonId];
+                if (resourceOnHex === resourceName) {
+                    // This is a simplified assumption of yield rate; ideally, this comes from definition or constant
+                    netChange += 0.02; // Assuming 0.02 units per second per node from updateFacility logic
+                }
+            }
+        });
+
+        // TODO: Add other global sources of income/expense for this resource if they exist
+        // e.g., from policies, tech effects not tied to facilities, trade.
+
+        return netChange; // This is net change per game tick (second) at current game speed=1
+    }
+
+    private tryRegionalDevelopmentProgram(gameState: GameState, playerState: PlayerState): GameState {
+        // Simplistic: Pick a random available program and a random region.
+        // A real AI would analyze regions and program benefits.
+        const availablePrograms = Object.values(RegionalDevelopmentProgramType);
+        if (availablePrograms.length === 0) return gameState;
+
+        const randomProgramType = availablePrograms[Math.floor(Math.random() * availablePrograms.length)];
+        const programDef = REGIONAL_DEVELOPMENT_PROGRAM_DEFINITIONS[randomProgramType];
+        if (!programDef) return gameState;
+
+        // Check if player can afford
+        const costs = programDef.cost || {};
+        let canAfford = true;
+        for (const resource in costs) {
+            if ((playerState.globalResources[resource] || 0) < costs[resource as keyof typeof costs]) {
+                canAfford = false;
+                break;
+            }
+        }
+        if (!canAfford) return gameState;
+
+        const randomRegion = gameState.regions[Math.floor(Math.random() * gameState.regions.length)];
+        if (playerState.activeRegionalPrograms[randomRegion.id]) {
+            return gameState; // Program already active in this randomly chosen region
+        }
+
+        this.log(`Considering initiating ${programDef.name} in ${randomRegion.name}`);
+        const result = this.gameEngine.initiateRegionalDevelopmentProgram(gameState, this.id, randomRegion.id, randomProgramType);
+        if (result.success && result.newState) {
+            this.log(`Successfully initiated ${programDef.name} in ${randomRegion.name}.`);
+            return result.newState;
+        }
+        return gameState;
+    }
+
+    private tryEnactPolicy(gameState: GameState, playerState: PlayerState): GameState {
+        // Simplistic: Pick a random available policy the AI doesn't have yet.
+        const availablePolicies = Object.values(PolicyType).filter(pType => !playerState.activePolicies.has(pType));
+        if (availablePolicies.length === 0) return gameState;
+
+        const randomPolicyType = availablePolicies[Math.floor(Math.random() * availablePolicies.length)];
+        const policyDef = POLICY_DEFINITIONS[randomPolicyType];
+        if (!policyDef) return gameState;
+
+        // Check affordability for adoption
+        const adoptionCosts = policyDef.adoptionCost || {};
+        let canAffordAdoption = true;
+        for (const resource in adoptionCosts) {
+             if ((playerState.globalResources[resource] || 0) < adoptionCosts[resource as keyof typeof adoptionCosts]) {
+                canAffordAdoption = false;
+                break;
+            }
+        }
+        if (!canAffordAdoption) return gameState;
+
+        // Check if mutually exclusive with any active policy
+        if (policyDef.mutuallyExclusivePolicies) {
+            for (const exclusiveType of policyDef.mutuallyExclusivePolicies) {
+                if (playerState.activePolicies.has(exclusiveType)) {
+                    return gameState; // Cannot enact due to active mutually exclusive policy
+                }
+            }
+        }
+
+        this.log(`Considering enacting policy: ${policyDef.name}`);
+        const result = this.gameEngine.enactPolicy(gameState, this.id, randomPolicyType);
+        if (result.success && result.newState) {
+            this.log(`Successfully enacted policy: ${policyDef.name}.`);
+            return result.newState;
         }
         return gameState;
     }

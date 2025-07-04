@@ -8,17 +8,19 @@ import { TECH_TREE } from './Technology'; // Import TECH_TREE
 export interface WorldRegion {
   id: string;
   name: string;
-  population: number;
-  health: number;
-  environment: number;
-  stability: number;
-  x: number;
-  y: number;
-  color: [number, number, number];
-  events: RegionEvent[];
-  gdp: number; // Gross Domestic Product
-  resourceDemand: Record<StrategicResourceType, number>;
-  resourceProduction: Record<StrategicResourceType, number>;
+  population: number; // Current population of the region
+  health: number; // Average health of the population (0-100)
+  environment: number; // Environmental quality (0-100)
+  stability: number; // Political and social stability (0-100)
+  x: number; // Coordinate for map display
+  y: number; // Coordinate for map display
+  color: [number, number, number]; // Color for map display
+  events: RegionEvent[]; // Active events in this region
+  gdp: number; // Gross Domestic Product, representing economic output
+  // Records for tracking the supply and demand of strategic resources within the region.
+  // These are influenced by population, facilities, and global economic conditions.
+  resourceDemand: Record<StrategicResourceType, number>; // Units demanded per tick
+  resourceProduction: Record<StrategicResourceType, number>; // Units produced per tick
 }
 
 export interface RegionEvent {
@@ -54,7 +56,9 @@ export enum EventType {
   GEOENGINEERING = 'geoengineering',
   HEALING = 'healing',
   ENVIRONMENTAL_RESTORATION = 'environmental_restoration',
-  PEACE_TREATY = 'peace_treaty'
+  PEACE_TREATY = 'peace_treaty',
+  // Dynamically triggered economic/regional state events
+  REGIONAL_ENERGY_CRISIS = 'regional_energy_crisis',
 }
 
 export interface GameState {
@@ -87,6 +91,15 @@ export interface PlayerState {
     progress: number;
   };
   scannedHexes: Set<string>; // Hexes scanned by this player
+  activePolicies: Set<PolicyType>; // Player-wide active strategic policies
+  // Stores active regional development programs, key is regionId
+  activeRegionalPrograms: Record<string, {
+    programType: RegionalDevelopmentProgramType;
+    definition: RegionalDevelopmentProgramDefinition; // Store definition for easy access
+    startedAtTick: number; // Game time (ticks) when it started
+    durationTicks: number; // Total duration in ticks
+    effectsAppliedPerTick?: boolean; // Flag if per-tick effects have been applied for current tick cycle
+  }>;
   // Potentially add player-specific scores, objectives, relationships etc. later
 }
 
@@ -136,28 +149,61 @@ export class GameEngine {
         assignments[hexId] = null;
       }
     });
-    // console.log("Strategic resource assignments:", assignments); // Less console noise
     return assignments;
   }
 
   createInitialWorld(numAI: number = 1): GameState {
-    const initialResourceValues = () => {
-      const resources: Record<StrategicResourceType, number> = {} as Record<StrategicResourceType, number>;
+    // Helper to initialize resource demand/production for a region
+    const initialRegionalEconomicProfile = (population: number, gdp: number, baseDemandFactor: number = 5, baseProductionFactor: number = 3) => {
+      const profile: Record<StrategicResourceType, number> = {} as Record<StrategicResourceType, number>;
+      const popMillions = population / 1000000;
+      const gdpThousands = gdp / 1000;
+
       for (const resType of Object.values(StrategicResourceType)) {
-        resources[resType] = Math.random() * 10 + 5; // Base demand/production between 5-15
+        // More nuanced initial values based on population and GDP
+        // Example: demand scales with population and GDP, production more with GDP and some randomness
+        const demand = (popMillions / 100) * (gdpThousands / 10) * (Math.random() * 0.5 + 0.75) * baseDemandFactor;
+        const production = (gdpThousands / 10) * (Math.random() * 0.8 + 0.6) * baseProductionFactor;
+        profile[resType] = demand; // For demand map
+        // To use this for production map, call it again or assign profile[resType] = production;
       }
-      return resources;
+      return profile;
     };
 
-    const regions: WorldRegion[] = [
-      // Same region definitions as before
-      { id: 'na', name: 'North America', population: 580000000, health: 78, environment: 65, stability: 75, x: -0.6, y: 0.3, color: [0.3, 0.6, 0.9], events: [], gdp: 25000, resourceDemand: initialResourceValues(), resourceProduction: initialResourceValues() },
-      { id: 'sa', name: 'South America', population: 430000000, health: 72, environment: 55, stability: 65, x: -0.4, y: -0.4, color: [0.4, 0.8, 0.3], events: [], gdp: 10000, resourceDemand: initialResourceValues(), resourceProduction: initialResourceValues() },
-      { id: 'eu', name: 'Europe', population: 750000000, health: 82, environment: 70, stability: 80, x: 0.1, y: 0.4, color: [0.7, 0.4, 0.9], events: [], gdp: 22000, resourceDemand: initialResourceValues(), resourceProduction: initialResourceValues() },
-      { id: 'af', name: 'Africa', population: 1400000000, health: 65, environment: 45, stability: 55, x: 0.2, y: -0.1, color: [0.9, 0.6, 0.2], events: [], gdp: 5000, resourceDemand: initialResourceValues(), resourceProduction: initialResourceValues() },
-      { id: 'as', name: 'Asia', population: 4600000000, health: 74, environment: 50, stability: 70, x: 0.6, y: 0.2, color: [0.9, 0.3, 0.4], events: [], gdp: 30000, resourceDemand: initialResourceValues(), resourceProduction: initialResourceValues() },
-      { id: 'oc', name: 'Oceania', population: 50000000, health: 85, environment: 75, stability: 85, x: 0.8, y: -0.5, color: [0.2, 0.9, 0.7], events: [], gdp: 3000, resourceDemand: initialResourceValues(), resourceProduction: initialResourceValues() }
+    const createInitialResourceValues = (population: number, gdp: number, isDemand: boolean) => {
+        const resources: Record<StrategicResourceType, number> = {} as Record<StrategicResourceType, number>;
+        const popFactor = population / 100000000; // Population in 100 millions
+        const gdpFactor = gdp / 10000; // GDP in 10 trillions (assuming GDP is in billions)
+
+        for (const resType of Object.values(StrategicResourceType)) {
+            let baseValue = Math.random() * 5 + 2; // Base random value between 2-7
+            if (isDemand) {
+                // Demand influenced by population and GDP complexity
+                resources[resType] = baseValue * popFactor * (1 + gdpFactor * 0.5);
+            } else {
+                // Production influenced more by GDP (industrial capacity) and some base potential
+                resources[resType] = baseValue * (1 + gdpFactor) * (Math.random() * 0.5 + 0.5); // More variability in production
+            }
+            resources[resType] = Math.max(0.1, resources[resType]); // Ensure not zero
+        }
+        return resources;
+    };
+
+    const regionsData = [
+      { id: 'na', name: 'North America', population: 580000000, health: 78, environment: 65, stability: 75, x: -0.6, y: 0.3, color: [0.3, 0.6, 0.9] as [number,number,number], gdp: 25000000 }, // GDP in millions
+      { id: 'sa', name: 'South America', population: 430000000, health: 72, environment: 55, stability: 65, x: -0.4, y: -0.4, color: [0.4, 0.8, 0.3] as [number,number,number], gdp: 10000000 },
+      { id: 'eu', name: 'Europe', population: 750000000, health: 82, environment: 70, stability: 80, x: 0.1, y: 0.4, color: [0.7, 0.4, 0.9] as [number,number,number], gdp: 22000000 },
+      { id: 'af', name: 'Africa', population: 1400000000, health: 65, environment: 45, stability: 55, x: 0.2, y: -0.1, color: [0.9, 0.6, 0.2] as [number,number,number], gdp: 5000000 },
+      { id: 'as', name: 'Asia', population: 4600000000, health: 74, environment: 50, stability: 70, x: 0.6, y: 0.2, color: [0.9, 0.3, 0.4] as [number,number,number], gdp: 30000000 },
+      { id: 'oc', name: 'Oceania', population: 50000000, health: 85, environment: 75, stability: 85, x: 0.8, y: -0.5, color: [0.2, 0.9, 0.7] as [number,number,number], gdp: 3000000 }
     ];
+
+    const regions: WorldRegion[] = regionsData.map(r => ({
+        ...r,
+        events: [],
+        resourceDemand: createInitialResourceValues(r.population, r.gdp, true),
+        resourceProduction: createInitialResourceValues(r.population, r.gdp, false),
+    }));
 
     const numberOfHexagons = 256;
     const allHexagonIds = GameEngine.generateHexagonIds(numberOfHexagons);
@@ -174,6 +220,8 @@ export class GameEngine {
       unlockedTechs: [],
       currentResearch: undefined,
       scannedHexes: new Set<string>(),
+      activePolicies: new Set<PolicyType>(),
+      activeRegionalPrograms: {},
     };
 
     this.aiPlayers = []; // Clear previous AI players
@@ -188,6 +236,8 @@ export class GameEngine {
         unlockedTechs: [],
         currentResearch: undefined,
         scannedHexes: new Set<string>(),
+        activePolicies: new Set<PolicyType>(),
+        activeRegionalPrograms: {},
       };
       this.aiPlayers.push(new AIPlayer(aiPlayerId, this));
     }
@@ -391,108 +441,105 @@ export class GameEngine {
   private updateFacility(facility: PlanetaryFacility, deltaTime: number, state: GameState, allHexagonIds: string[]): PlanetaryFacility {
     const playerState = state.players[facility.ownerPlayerId];
     if (!playerState) {
-        // console.warn(`Facility ${facility.id} has no owner or owner ${facility.ownerPlayerId} not found.`);
         return facility;
     }
 
     const newFacility = { ...facility }; // Operate on a copy
+    const tickDeltaTime = deltaTime * state.speed;
+
+    // Construction
     if (newFacility.constructionTimeLeft && newFacility.constructionTimeLeft > 0) {
-      newFacility.constructionTimeLeft -= deltaTime * state.speed;
+      newFacility.constructionTimeLeft -= tickDeltaTime;
       if (newFacility.constructionTimeLeft <= 0) {
         newFacility.operational = true;
         newFacility.constructionTimeLeft = 0;
-        console.log(`Facility ${newFacility.id} (${newFacility.type}) for player ${facility.ownerPlayerId} in region ${newFacility.regionId} is now operational.`);
+        // console.log(`Facility ${newFacility.id} (${newFacility.type}) for player ${facility.ownerPlayerId} in region ${newFacility.regionId} is now operational.`);
       }
-      return newFacility; // Return the modified copy
+      return newFacility;
     }
 
     if (!newFacility.operational) {
-      return newFacility; // Return the copy
+      return newFacility;
     }
 
     const definition = FACILITY_DEFINITIONS[newFacility.type];
-    if (definition) {
-      // Ensure playerState.globalResources is copied before modification if this function is expected to be pure regarding playerState
-      // However, updateFacility is usually called within a loop that reconstructs playerState or gameState, so direct mutation might be acceptable in that context.
-      // For safety, if playerState might be shared or re-used without deep copy, copy globalResources here.
-      // const modifiablePlayerResources = { ...playerState.globalResources };
+    if (!definition) return newFacility;
 
-      if (newFacility.type === FacilityType.STRATEGIC_RESOURCE_NODE && newFacility.hexagonId) {
-        const resourceOnHex = state.hexagonStrategicResources[newFacility.hexagonId];
-        if (resourceOnHex) {
-          const yieldAmount = 0.02 * deltaTime * state.speed;
-          playerState.globalResources[resourceOnHex] = (playerState.globalResources[resourceOnHex] || 0) + yieldAmount;
-        }
-      } else {
+    // Apply player-specific resource yield and maintenance costs
+    if (definition.effects) {
         definition.effects.forEach(effect => {
-          let yieldMultiplier = 1;
-          if (newFacility.type === FacilityType.RESEARCH_OUTPOST && newFacility.hexagonId && effect.resourceYield?.research) {
-            const adjacencies = this.getHexagonAdjacencies(newFacility.hexagonId, allHexagonIds);
-            let adjacentResearchOutposts = 0;
-            playerState.activeFacilities.forEach(f => {
-                if (f.hexagonId && adjacencies.includes(f.hexagonId) && f.type === FacilityType.RESEARCH_OUTPOST && f.operational && f.ownerPlayerId === facility.ownerPlayerId) {
-                    adjacentResearchOutposts++;
+            if (effect.resourceYield) {
+                for (const resourceType in effect.resourceYield) {
+                    const yieldAmount = effect.resourceYield[resourceType as keyof typeof effect.resourceYield] || 0;
+                    playerState.globalResources[resourceType] = (playerState.globalResources[resourceType] || 0) + yieldAmount * tickDeltaTime;
                 }
-            });
-            if (adjacentResearchOutposts > 0) {
-              yieldMultiplier += adjacentResearchOutposts * 0.1;
             }
-          }
-
-          if (effect.resourceYield) {
-            for (const resourceType in effect.resourceYield) {
-              const baseYield = effect.resourceYield[resourceType];
-              playerState.globalResources[resourceType] = (playerState.globalResources[resourceType] || 0) + baseYield * yieldMultiplier * deltaTime * state.speed;
-            }
-          }
-          if (effect.stabilityModifier) {
-            const region = state.regions.find(r => r.id === newFacility.regionId);
-            if (region) {
-              region.stability = Math.max(0, Math.min(100, region.stability + effect.stabilityModifier * deltaTime * state.speed));
-            }
-          }
+            // Stability effects are now regional, but direct player effects could be here
         });
-
-        // Apply economic impacts to the region
-        if (definition.economicImpact) {
-          const region = state.regions.find(r => r.id === newFacility.regionId);
-          if (region) {
-            const tickDelta = deltaTime * state.speed;
-            if (definition.economicImpact.gdpBoost) {
-              region.gdp += definition.economicImpact.gdpBoost * tickDelta;
-            }
-            if (definition.economicImpact.gdpMultiplier) {
-              region.gdp *= (1 + (definition.economicImpact.gdpMultiplier - 1) * tickDelta);
-            }
-            region.gdp = Math.max(1, region.gdp);
-
-            if (definition.economicImpact.productionModifier) {
-              for (const resTypeStr in definition.economicImpact.productionModifier) {
-                const resType = resTypeStr as StrategicResourceType;
-                const modifier = definition.economicImpact.productionModifier[resType];
-                if (modifier && region.resourceProduction[resType] !== undefined) {
-                  region.resourceProduction[resType] *= (1 + (modifier - 1) * tickDelta);
-                }
-              }
-            }
-            if (definition.economicImpact.demandModifier) {
-              for (const resTypeStr in definition.economicImpact.demandModifier) {
-                const resType = resTypeStr as StrategicResourceType;
-                const modifier = definition.economicImpact.demandModifier[resType];
-                if (modifier && region.resourceDemand[resType] !== undefined) {
-                  region.resourceDemand[resType] *= (1 + (modifier - 1) * tickDelta);
-                  region.resourceDemand[resType] = Math.max(0.1, region.resourceDemand[resType]); // Demand shouldn't be zero
-                }
-              }
-            }
-          }
+    }
+    if (definition.maintenanceCost) {
+        for (const resource in definition.maintenanceCost) {
+            const costAmount = definition.maintenanceCost[resource as keyof typeof definition.maintenanceCost] || 0;
+            playerState.globalResources[resource] = (playerState.globalResources[resource] || 0) - costAmount * tickDeltaTime;
         }
+    }
+
+    // Strategic Resource Node specific yield (player direct yield)
+    if (newFacility.type === FacilityType.STRATEGIC_RESOURCE_NODE && newFacility.hexagonId) {
+      const resourceOnHex = state.hexagonStrategicResources[newFacility.hexagonId];
+      if (resourceOnHex) {
+        // Yield rate could be defined in FACILITY_DEFINITIONS or a global constant
+        const yieldAmount = 0.02 * tickDeltaTime; // Example: 0.02 units per second
+        playerState.globalResources[resourceOnHex] = (playerState.globalResources[resourceOnHex] || 0) + yieldAmount;
       }
     }
-    return newFacility; // Return the modified copy
+
+    // Apply regional economic impacts (once per facility update, affects the region it's in)
+    // This part affects the region's economy, not the player's direct resources.
+    // It's called here, but the modification is on the region object within the main updateWorld loop's context.
+    // To ensure this is clean, updateFacility should not directly modify 'state.regions'.
+    // Instead, these impacts could be aggregated and applied to regions in updateRegion or a dedicated economic update phase.
+    // For now, let's assume direct modification is acceptable within the GameEngine's private methods if state is properly copied.
+    const region = state.regions.find(r => r.id === newFacility.regionId);
+    if (region && definition.economicImpact) {
+        const impact = definition.economicImpact;
+        if (impact.gdpBoostPerTick) {
+            region.gdp += impact.gdpBoostPerTick * tickDeltaTime;
+        }
+        if (impact.gdpMultiplier) { // Assuming this is a one-time or slowly accumulating multiplier effect
+             // This logic might need to be one-time on construction, or a very slow tick.
+             // For per-tick: region.gdp *= (1 + (impact.gdpMultiplier - 1) * tickDeltaTime);
+        }
+        region.gdp = Math.max(1, region.gdp);
+
+        if (impact.regionalProductionModifier) {
+            for (const resTypeStr in impact.regionalProductionModifier) {
+                const resType = resTypeStr as StrategicResourceType;
+                const modifier = impact.regionalProductionModifier[resType];
+                if (modifier && region.resourceProduction[resType] !== undefined) {
+                    // This should modify the BASE production, or be an additive boost.
+                    // If it's a multiplier, it should apply to a base rate not the fluctuating current value.
+                    // Simplified: apply additive boost based on modifier.
+                    region.resourceProduction[resType] += (modifier -1) * 0.1 * tickDeltaTime; // Small additive boost
+                    region.resourceProduction[resType] = Math.max(0, region.resourceProduction[resType]);
+                }
+            }
+        }
+        if (impact.regionalDemandModifier) {
+            for (const resTypeStr in impact.regionalDemandModifier) {
+                const resType = resTypeStr as StrategicResourceType;
+                const modifier = impact.regionalDemandModifier[resType];
+                if (modifier && region.resourceDemand[resType] !== undefined) {
+                    region.resourceDemand[resType] += (modifier-1) * 0.1 * tickDeltaTime; // Small additive change
+                    region.resourceDemand[resType] = Math.max(0.1, region.resourceDemand[resType]);
+                }
+            }
+        }
+    }
+    return newFacility;
   }
 
-  // Placeholder for fetching hexagon adjacencies - remains the same.
+  // Placeholder for fetching hexagon adjacencies - remains the same. This might be removed if not used by Research Outposts anymore.
   private getHexagonAdjacencies(hexagonId: string, allHexagonIds: string[]): string[] {
     const MOCK_ADJACENCY_COUNT = 6;
     const foundAdjacencies: string[] = [];
@@ -626,6 +673,9 @@ export class GameEngine {
     this.spawnRandomEvents(newState);    // Modifies newState.activeEvents and region.events directly
     this.applyModeEffects(newState);     // Modifies newState.regions directly
 
+    // Process player-specific programs and policies
+    newState = this.processPlayerProgramsAndPolicies(newState, deltaTime);
+
     // AI Player decisions
     if (newState.running) {
         this.aiPlayers.forEach(aiPlayer => {
@@ -633,6 +683,9 @@ export class GameEngine {
             newState = aiPlayer.makeDecisions(newState);
         });
     }
+
+    // Check for and trigger dynamic events based on current state
+    newState = this.checkAndTriggerDynamicEvents(newState);
     
     return newState; // Return the fully updated new state
   }
@@ -725,61 +778,88 @@ private applyConflict(eventA: RegionEvent, eventB: RegionEvent, conflictDef: Non
 }
   
   private updateRegion(region: WorldRegion, deltaTime: number, state: GameState): WorldRegion {
-    const newRegion = { ...region };
-    
-    const noise = this.noise2D(region.x * 5, state.time * 0.0001) * 0.05; // Reduced noise impact slightly
-    const tickDelta = deltaTime; // deltaTime already incorporates game speed from updateWorld
+    const newRegion = { ...region }; // Operate on a copy
+    const tickDelta = deltaTime; // deltaTime already incorporates game speed from updateWorld via updateWorld function
 
-    newRegion.health = Math.max(0, Math.min(100, newRegion.health + noise * tickDelta * 10));
-    newRegion.environment = Math.max(0, Math.min(100, newRegion.environment + noise * 0.8 * tickDelta * 10));
-    newRegion.stability = Math.max(0, Math.min(100, newRegion.stability + noise * 1.2 * tickDelta * 10));
+    // Baseline environmental and stability fluctuations (e.g., noise, gradual decay/recovery)
+    const baseNoise = this.noise2D(region.x * 5 + state.time * 0.00001, state.time * 0.00005); // Slower time evolution for noise
+    newRegion.environment = Math.max(0, Math.min(100, newRegion.environment + baseNoise * 0.1 * tickDelta));
+    newRegion.stability = Math.max(0, Math.min(100, newRegion.stability + baseNoise * 0.2 * tickDelta)); // Stability slightly more volatile to noise
 
-    // Economic Updates
-    const baseGdpGrowthFactor = 0.001; // Small base growth per tick
-    const stabilityFactor = newRegion.stability / 100;
-    const healthFactor = newRegion.health / 100;
-    newRegion.gdp += newRegion.gdp * (baseGdpGrowthFactor + (stabilityFactor - 0.5) * 0.01 + (healthFactor - 0.5) * 0.005) * tickDelta;
-    newRegion.gdp = Math.max(1, newRegion.gdp); // GDP should not go to zero or negative
+    // --- Economic Simulation Update ---
+    const popMillions = newRegion.population / 1000000;
+    const gdpBillions = newRegion.gdp / 1000; // Assuming initial GDP is in millions
 
+    // 1. Update Regional GDP based on various factors
+    let gdpGrowthFactor = 0.0005; // Base micro-growth per tick
+    gdpGrowthFactor += (newRegion.stability / 100 - 0.5) * 0.001; // Stability contribution
+    gdpGrowthFactor += (newRegion.health / 100 - 0.5) * 0.0005; // Health contribution
+    gdpGrowthFactor += (newRegion.environment / 100 - 0.5) * 0.0003; // Environment contribution
+    // Resource availability can also impact GDP (simplified)
+    let resourceShortageImpact = 0;
+    Object.values(StrategicResourceType).forEach(resType => {
+        if (newRegion.resourceProduction[resType] < newRegion.resourceDemand[resType]) {
+            resourceShortageImpact -= 0.0001; // Each shortage type slightly dampens GDP growth
+        }
+    });
+    gdpGrowthFactor += resourceShortageImpact;
+    newRegion.gdp *= (1 + gdpGrowthFactor * tickDelta);
+    newRegion.gdp = Math.max(100, newRegion.gdp); // Minimum GDP
+
+
+    // 2. Update Regional Demand for Strategic Resources
+    // Demand is driven by population, GDP (complexity of economy), and active facilities.
+    // Facility impacts on demand/production are now directly applied in updateFacility to the region's values.
+    for (const resType of Object.values(StrategicResourceType)) {
+        let baseDemand = (popMillions / 10) * (1 + gdpBillions / 1000) * 0.005; // Base demand per tick based on pop & gdp
+
+        // Simulate consumption/decay of demand if not met, or slight natural growth
+        newRegion.resourceDemand[resType] = Math.max(0.1, (newRegion.resourceDemand[resType] || 0) * (1 - 0.001 * tickDelta) + baseDemand * tickDelta);
+
+        // Production is also influenced by facilities (in updateFacility) and potentially by regional stats like environment/stability
+        let baseProductionFactor = (newRegion.environment / 100) * (newRegion.stability / 100); // Healthier, stabler regions are better at production
+        newRegion.resourceProduction[resType] = Math.max(0, (newRegion.resourceProduction[resType] || 0) * (1 - 0.0005 * tickDelta) + (baseProductionFactor * 0.002 * gdpBillions * tickDelta) );
+    }
+
+    // 3. Health and Stability affected by Resource Balance
     let overallResourceBalanceScore = 0;
     const numStrategicResources = Object.keys(StrategicResourceType).length;
-
     for (const resType of Object.values(StrategicResourceType)) {
-        // Demand increases with population (very simplified)
-        newRegion.resourceDemand[resType] = Math.max(1, (newRegion.population / 100000000) * 5 * tickDelta + (newRegion.resourceDemand[resType] || 0) * (1 - tickDelta*0.1) ); // demand decays slowly if not replenished by pop change
-
-        // Production slightly tied to environment and stability (very simplified)
-        const productionFluctuation = (newRegion.environment / 100 - 0.5) * 0.1 + (newRegion.stability / 100 - 0.5) * 0.05;
-        newRegion.resourceProduction[resType] = Math.max(0, (newRegion.resourceProduction[resType] || 0) * (1 + productionFluctuation * tickDelta));
-
         const balance = (newRegion.resourceProduction[resType] || 0) - (newRegion.resourceDemand[resType] || 0);
-        if (balance < 0) {
-            overallResourceBalanceScore -= 1;
-        } else {
-            overallResourceBalanceScore += 0.5; // Surplus is less impactful than deficit for stability adjustment
+        if (balance < 0) { // Deficit
+            overallResourceBalanceScore -= Math.abs(balance) / Math.max(1, (newRegion.resourceDemand[resType] || 1)); // Fractional deficit impact
+        } else { // Surplus
+            overallResourceBalanceScore += (balance / Math.max(1, (newRegion.resourceDemand[resType] || 1))) * 0.2; // Surplus is less impactful
         }
     }
+    // Normalize score (very roughly)
+    const normalizedBalanceImpact = overallResourceBalanceScore / numStrategicResources;
 
-    // Adjust stability based on overall resource balance
-    if (overallResourceBalanceScore < -numStrategicResources / 2) { // If more than half resources are in deficit
-        newRegion.stability -= 0.05 * tickDelta * 60; // Scaled to be per second like
-    } else if (overallResourceBalanceScore > numStrategicResources / 3) { // If more than a third are in surplus
-        newRegion.stability += 0.02 * tickDelta * 60;
-    }
+    newRegion.stability += normalizedBalanceImpact * 0.05 * tickDelta * 60; // Scaled impact per "minute"
+    newRegion.health += normalizedBalanceImpact * 0.02 * tickDelta * 60; // Resource shortages also affect health
+
     newRegion.stability = Math.max(0, Math.min(100, newRegion.stability));
+    newRegion.health = Math.max(0, Math.min(100, newRegion.health));
+
+    // --- End Economic Simulation Update ---
     
     // Apply effects of active events in this region
     state.activeEvents.forEach(event => {
         if (event.active && this.isEventInRegion(event, newRegion)) {
-            this.applyEventToRegion(newRegion, event); // applyEventToRegion uses event.severity directly, not deltaTime scaled
+            this.applyEventToRegion(newRegion, event); // applyEventToRegion uses event.severity directly
         }
     });
     
-    // Population change based on health, environment, stability
-    // More sensitive population change model
-    const growthRate = (newRegion.health / 100 - 0.3) + (newRegion.environment / 100 - 0.4) + (newRegion.stability / 100 - 0.3); // Base at 0.3 + 0.4 + 0.3 = 1.0
-    const populationChangeFactor = growthRate * 0.0005 * tickDelta * 60; // Scaled to be per second like
-    newRegion.population = Math.max(0, newRegion.population * (1 + populationChangeFactor));
+    // Population change based on health, environment, stability, and potentially resource availability
+    let populationGrowthRate = (newRegion.health / 100 - 0.4) * 0.001; // Base health contribution
+    populationGrowthRate += (newRegion.environment / 100 - 0.5) * 0.0005; // Environment
+    populationGrowthRate += (newRegion.stability / 100 - 0.4) * 0.0008; // Stability
+    // If severe resource shortages, reduce population growth or cause decline
+    if (normalizedBalanceImpact < -0.5) { // If average resource deficit is more than 50%
+        populationGrowthRate -= Math.abs(normalizedBalanceImpact) * 0.001;
+    }
+    const populationChange = newRegion.population * populationGrowthRate * tickDelta;
+    newRegion.population = Math.max(0, newRegion.population + populationChange);
     
     return newRegion;
   }
@@ -1238,5 +1318,354 @@ public buildFacility(state: GameState, facilityType: FacilityType, regionId: str
         }
       }
     };
+  }
+
+  // --- Player Actions: Policies and Regional Programs ---
+
+  public enactPolicy(currentState: GameState, playerId: string, policyType: PolicyType): { success: boolean, message: string, newState?: GameState } {
+    const playerState = currentState.players[playerId];
+    if (!playerState) {
+      return { success: false, message: `Player ${playerId} not found.` };
+    }
+
+    const definition = POLICY_DEFINITIONS[policyType];
+    if (!definition) {
+      return { success: false, message: `Policy ${policyType} not defined.` };
+    }
+
+    if (playerState.activePolicies.has(policyType)) {
+      return { success: false, message: `Policy ${definition.name} is already active for player ${playerId}.` };
+    }
+
+    // Check for mutually exclusive policies
+    if (definition.mutuallyExclusivePolicies) {
+      for (const exclusivePolicy of definition.mutuallyExclusivePolicies) {
+        if (playerState.activePolicies.has(exclusivePolicy)) {
+          const exclusiveDef = POLICY_DEFINITIONS[exclusivePolicy];
+          return { success: false, message: `Cannot enact ${definition.name}: It is mutually exclusive with the active policy "${exclusiveDef?.name || exclusivePolicy}".` };
+        }
+      }
+    }
+
+    // Check adoption costs
+    const costs = definition.adoptionCost || {};
+    const canAfford = Object.entries(costs).every(([resource, cost]) => (playerState.globalResources[resource] || 0) >= cost);
+
+    if (!canAfford) {
+      let missing = "";
+      for (const resource in costs) {
+        if ((playerState.globalResources[resource] || 0) < costs[resource]) {
+          missing += `${resource}: ${costs[resource]} (has ${playerState.globalResources[resource] || 0}), `;
+        }
+      }
+      return { success: false, message: `Player ${playerId} cannot enact ${definition.name}: Insufficient resources. Missing: ${missing.slice(0,-2)}` };
+    }
+
+    // Deduct costs and update player state
+    const newPlayerResources = { ...playerState.globalResources };
+    for (const resource in costs) {
+      newPlayerResources[resource] -= costs[resource];
+    }
+    const newActivePolicies = new Set(playerState.activePolicies);
+    newActivePolicies.add(policyType);
+
+    const updatedPlayerState: PlayerState = {
+      ...playerState,
+      globalResources: newPlayerResources,
+      activePolicies: newActivePolicies,
+    };
+
+    return {
+      success: true,
+      message: `Policy "${definition.name}" enacted for player ${playerId}.`,
+      newState: {
+        ...currentState,
+        players: {
+          ...currentState.players,
+          [playerId]: updatedPlayerState,
+        }
+      }
+    };
+  }
+
+  public revokePolicy(currentState: GameState, playerId: string, policyType: PolicyType): { success: boolean, message: string, newState?: GameState } {
+    const playerState = currentState.players[playerId];
+    if (!playerState) {
+      return { success: false, message: `Player ${playerId} not found.` };
+    }
+
+    const definition = POLICY_DEFINITIONS[policyType];
+    if (!definition) {
+      return { success: false, message: `Policy ${policyType} not defined.` };
+    }
+
+    if (!playerState.activePolicies.has(policyType)) {
+      return { success: false, message: `Policy ${definition.name} is not active for player ${playerId}.` };
+    }
+
+    // TODO: Consider revocation costs or cooldowns in the future.
+    const newActivePolicies = new Set(playerState.activePolicies);
+    newActivePolicies.delete(policyType);
+
+    const updatedPlayerState: PlayerState = {
+      ...playerState,
+      activePolicies: newActivePolicies,
+    };
+
+    return {
+      success: true,
+      message: `Policy "${definition.name}" revoked for player ${playerId}.`,
+      newState: {
+        ...currentState,
+        players: {
+          ...currentState.players,
+          [playerId]: updatedPlayerState,
+        }
+      }
+    };
+  }
+
+  public initiateRegionalDevelopmentProgram(
+    currentState: GameState,
+    playerId: string,
+    regionId: string,
+    programType: RegionalDevelopmentProgramType
+  ): { success: boolean, message: string, newState?: GameState } {
+    const playerState = currentState.players[playerId];
+    if (!playerState) {
+      return { success: false, message: `Player ${playerId} not found.` };
+    }
+
+    const region = currentState.regions.find(r => r.id === regionId);
+    if (!region) {
+      return { success: false, message: `Region ${regionId} not found.` };
+    }
+
+    // Potentially check if the region is controlled by the player in a more complex ownership model.
+    // For now, assuming player can initiate in any region if they can afford it.
+
+    const definition = REGIONAL_DEVELOPMENT_PROGRAM_DEFINITIONS[programType];
+    if (!definition) {
+      return { success: false, message: `Regional Development Program ${programType} not defined.` };
+    }
+
+    // Check if a program is already active in this region for this player
+    if (playerState.activeRegionalPrograms[regionId]) {
+        const activeProgram = playerState.activeRegionalPrograms[regionId];
+        return { success: false, message: `A program ("${activeProgram.definition.name}") is already active in ${region.name} for player ${playerId}.`};
+    }
+
+    // Check costs
+    const costs = definition.cost || {};
+    const canAfford = Object.entries(costs).every(([resource, cost]) => (playerState.globalResources[resource] || 0) >= cost);
+
+    if (!canAfford) {
+      let missing = "";
+      for (const resource in costs) {
+        if ((playerState.globalResources[resource] || 0) < costs[resource]) {
+          missing += `${resource}: ${costs[resource]} (has ${playerState.globalResources[resource] || 0}), `;
+        }
+      }
+      return { success: false, message: `Player ${playerId} cannot initiate ${definition.name} in ${region.name}: Insufficient resources. Missing: ${missing.slice(0,-2)}` };
+    }
+
+    // Deduct costs
+    const newPlayerResources = { ...playerState.globalResources };
+    for (const resource in costs) {
+      newPlayerResources[resource] -= costs[resource];
+    }
+
+    // Add program to player's active list
+    const newActiveRegionalPrograms = { ...playerState.activeRegionalPrograms };
+    newActiveRegionalPrograms[regionId] = {
+      programType,
+      definition,
+      startedAtTick: currentState.time, // Assuming state.time is effectively game ticks or can be used as such
+      durationTicks: definition.durationTicks,
+    };
+
+    // Apply one-time effects of the program to the region immediately
+    let newRegions = [...currentState.regions];
+    if (definition.oneTimeEffects) {
+        const targetRegionIndex = newRegions.findIndex(r => r.id === regionId);
+        if (targetRegionIndex !== -1) {
+            let updatedRegion = { ...newRegions[targetRegionIndex] };
+            const effects = definition.oneTimeEffects;
+            if(effects.health) updatedRegion.health = Math.max(0, Math.min(100, updatedRegion.health + effects.health));
+            if(effects.environment) updatedRegion.environment = Math.max(0, Math.min(100, updatedRegion.environment + effects.environment));
+            if(effects.stability) updatedRegion.stability = Math.max(0, Math.min(100, updatedRegion.stability + effects.stability));
+            if(effects.population) updatedRegion.population = Math.max(0, updatedRegion.population + effects.population);
+            if(effects.populationMultiplier) updatedRegion.population = Math.max(0, updatedRegion.population * effects.populationMultiplier);
+            // Note: GDP and resource production/demand changes from oneTimeEffects would also go here if defined.
+            newRegions[targetRegionIndex] = updatedRegion;
+        }
+    }
+
+    const updatedPlayerState: PlayerState = {
+      ...playerState,
+      globalResources: newPlayerResources,
+      activeRegionalPrograms: newActiveRegionalPrograms,
+    };
+
+    return {
+      success: true,
+      message: `Regional Development Program "${definition.name}" initiated in ${region.name} by player ${playerId}.`,
+      newState: {
+        ...currentState,
+        regions: newRegions, // Make sure to use the potentially updated regions
+        players: {
+          ...currentState.players,
+          [playerId]: updatedPlayerState,
+        }
+      }
+    };
+  }
+
+  // Placeholder for processing active programs and policies - to be called in updateWorld
+  private processPlayerProgramsAndPolicies(currentState: GameState, deltaTime: number): GameState {
+    let newState = { ...currentState };
+
+    for (const playerId in newState.players) {
+      const player = newState.players[playerId];
+      let playerNeedsUpdate = false;
+
+      // Process active regional programs
+      const activePrograms = { ...player.activeRegionalPrograms };
+      for (const regionId in activePrograms) {
+        const program = activePrograms[regionId];
+        const regionIndex = newState.regions.findIndex(r => r.id === regionId);
+        if (regionIndex === -1) {
+          delete activePrograms[regionId]; // Region no longer exists or program is invalid
+          playerNeedsUpdate = true;
+          continue;
+        }
+
+        let region = { ...newState.regions[regionIndex] };
+
+        // Apply per-tick effects
+        if (program.definition.effectsPerTick) {
+          const effects = program.definition.effectsPerTick;
+          // Apply to region (health, stability, env, etc.)
+          if(effects.health) region.health += effects.health * deltaTime * newState.speed;
+          if(effects.environment) region.environment += effects.environment * deltaTime * newState.speed;
+          if(effects.stability) region.stability += effects.stability * deltaTime * newState.speed;
+          // Clamp values
+          region.health = Math.max(0, Math.min(100, region.health));
+          region.environment = Math.max(0, Math.min(100, region.environment));
+          region.stability = Math.max(0, Math.min(100, region.stability));
+        }
+
+        newState.regions[regionIndex] = region; // Update region in newState
+
+        // Check duration
+        // Note: Using state.time directly for duration check. Ensure program.startedAtTick and program.durationTicks are compatible.
+        if (newState.time >= program.startedAtTick + program.durationTicks) {
+          // Program finished, apply long-term modifiers and trigger final events
+          if (program.definition.longTermRegionalModifiers) {
+            // These modifiers would ideally be stored on the region or player state persistently
+            // For now, log that they would apply. Actual application needs careful thought on how they persist.
+            console.log(`Program ${program.definition.name} in ${region.name} finished. Long term modifiers would apply.`);
+          }
+          program.definition.eventTriggers?.forEach(trigger => {
+            if (Math.random() < trigger.chance) {
+              // TODO: Implement delayed event spawning if trigger.delayTicks is used
+              console.log(`Program ${program.definition.name} triggering event ${trigger.eventType} in ${region.name}`);
+              newState = this.triggerEvent(newState, trigger.eventType, regionId, playerId);
+            }
+          });
+          delete activePrograms[regionId];
+          playerNeedsUpdate = true;
+        }
+      }
+      if(playerNeedsUpdate) {
+           newState.players[playerId] = { ...player, activeRegionalPrograms: activePrograms };
+      }
+
+      // Process active policies (apply maintenance costs, global/regional modifiers)
+      player.activePolicies.forEach(policyType => {
+        const definition = POLICY_DEFINITIONS[policyType];
+        if (!definition) return;
+
+        // Apply maintenance costs
+        if (definition.maintenanceCostPerTick) {
+          for (const resource in definition.maintenanceCostPerTick) {
+            const cost = definition.maintenanceCostPerTick[resource as keyof typeof definition.maintenanceCostPerTick] || 0;
+            newState.players[playerId].globalResources[resource] = (newState.players[playerId].globalResources[resource] || 0) - cost * deltaTime * newState.speed;
+          }
+        }
+
+        // Global player modifiers (e.g., resource income, research speed)
+        // These would be checked by relevant systems (e.g., research update, resource calculation)
+        // For example, researchSpeedModifier would be used in updateResearchProgress.
+        // resourceIncomeModifier would need a central place where player income is calculated.
+
+        // Regional modifiers (for all regions controlled by player)
+        // This is complex if regions aren't explicitly player-controlled.
+        // For now, let's assume policies apply their regional modifiers abstractly,
+        // and specific game mechanics (like updateRegion) would need to check player's active policies
+        // if the region is considered under their influence.
+        // Example: if (playerControlsRegion(playerId, region.id)) { apply regional policy effects }
+      });
+    }
+    return newState;
+  }
+
+  private checkAndTriggerDynamicEvents(currentState: GameState): GameState {
+    let newState = { ...currentState };
+    const tickDelta = currentState.speed * (1/60); // Assuming 60 FPS for tick delta calculation, adjust if needed
+
+    // Check for Regional Energy Crisis for each player
+    for (const playerId in newState.players) {
+      const player = newState.players[playerId];
+      const energyBalance = player.globalResources.energy || 0; // Current stored energy
+
+      // Estimate net energy change based on facilities (a more accurate calculation might be needed)
+      let netEnergyProduction = 0;
+      player.activeFacilities.forEach(facility => {
+        const def = FACILITY_DEFINITIONS[facility.type];
+        if (def && facility.operational) {
+          def.effects.forEach(effect => {
+            if (effect.resourceYield && effect.resourceYield['energy']) {
+              netEnergyProduction += effect.resourceYield['energy'];
+            }
+          });
+          if (def.maintenanceCost && def.maintenanceCost['energy']) {
+            netEnergyProduction -= def.maintenanceCost['energy'];
+          }
+        }
+      });
+
+      // Condition: Low stored energy AND significant negative net production
+      // Add a random chance to prevent it from firing every single tick once conditions are met.
+      if (energyBalance < 20 && netEnergyProduction < -1 && Math.random() < 0.05) { // Thresholds and chance can be tuned
+        // Find a suitable region owned/influenced by the player to trigger the event
+        // For simplicity, pick a random region where the player has at least one facility.
+        const playerRegions = new Set<string>();
+        player.activeFacilities.forEach(f => playerRegions.add(f.regionId));
+
+        if (playerRegions.size > 0) {
+          const targetRegionId = Array.from(playerRegions)[Math.floor(Math.random() * playerRegions.size)];
+          const targetRegion = newState.regions.find(r => r.id === targetRegionId);
+
+          if (targetRegion) {
+            // Check if an energy crisis is NOT already active in this region for this player
+            const existingCrisis = newState.activeEvents.find(e =>
+              e.type === EventType.REGIONAL_ENERGY_CRISIS &&
+              e.active &&
+              this.isEventInRegion(e, targetRegion) // Basic check if coordinates match region
+              // Ideally, events might store a targetRegionId or be more clearly scoped
+            );
+
+            if (!existingCrisis) {
+              console.log(`Player ${playerId} is experiencing an energy crisis. Triggering ${EventType.REGIONAL_ENERGY_CRISIS} in region ${targetRegion.name}. Balance: ${energyBalance}, Net Prod: ${netEnergyProduction}`);
+              newState = this.triggerEvent(newState, EventType.REGIONAL_ENERGY_CRISIS, targetRegion.id, playerId);
+              // Potentially only trigger one such crisis per player per short interval to avoid spam
+            }
+          }
+        }
+      }
+    }
+    // TODO: Add checks for other dynamic events (e.g., resource shortages leading to famine/unrest)
+    return newState;
   }
 }

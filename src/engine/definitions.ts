@@ -277,16 +277,33 @@ export const THREAT_DEFINITIONS: Record<EventType, ThreatDefinition> = {
     visual: 'peace_doves',
     color: 0xffd700,
   },
+  [EventType.REGIONAL_ENERGY_CRISIS]: {
+    name: 'Regional Energy Crisis',
+    description: 'Severe energy shortages are crippling the region, impacting stability, production, and daily life. Essential services may fail.',
+    effects: { stability: -25, health: -5 }, // GDP impact will be indirect via stability and facility operation.
+    duration: 90, // Duration in ticks (e.g., seconds if 1 tick/sec)
+    visual: 'power_outage_effect', // Placeholder for a visual effect
+    color: 0x808080, // Dull grey
+    // This event is triggered dynamically, not by player cost.
+    // No spread by default, but could be added.
+    // Could be countered by policies or technologies that improve energy efficiency or production.
+    followUpEvents: [
+      { type: EventType.ECONOMIC_COLLAPSE, chance: 0.15, delay: 30, conditions: { stabilityBelow: 30 } },
+      // Could also trigger social unrest events or factory shutdown events if those are modeled.
+    ]
+  },
 };
 
 // TODO: Define structures for other game entities like facilities, units, etc.
 // export interface PlanetaryFacilityDefinition { ... }
 // export const FACILITY_DEFINITIONS: Record<string, PlanetaryFacilityDefinition> = { ... };
 
+// Defines the types of strategic resources available in the game.
+// These are typically tied to specific locations (hexagons) or advanced facilities.
 export enum StrategicResourceType {
-  RARE_METALS = 'rare_metals',
-  ANTIMATTER_CELLS = 'antimatter_cells',
-  EXOTIC_ISOTOPES = 'exotic_isotopes',
+  RARE_METALS = 'rare_metals', // Essential for advanced electronics and aerospace
+  ANTIMATTER_CELLS = 'antimatter_cells', // High-density power for advanced tech
+  EXOTIC_ISOTOPES = 'exotic_isotopes', // Used in fusion power or specialized weaponry
   DATA_CONDUITS = 'data_conduits', // Represents high-capacity data processing/transmission nodes
   BIOPRECURSORS = 'bioprecursors' // For advanced biological engineering or terraforming
 }
@@ -294,127 +311,232 @@ export enum StrategicResourceType {
 // General resources can still be strings in GameState.globalResources
 // This enum is for specific, map-located strategic resources.
 
+// Defines the types of facilities players can build.
+// Each facility has unique effects, costs, and potential upgrades.
 export enum FacilityType {
-  RESEARCH_OUTPOST = 'research_outpost',
-  RESOURCE_EXTRACTOR = 'resource_extractor', // Generic extractor
-  STRATEGIC_RESOURCE_NODE = 'strategic_resource_node', // Facility to tap into a specific hex resource
-  DEFENSE_PLATFORM = 'defense_platform',
-  ADVANCED_RESEARCH_LAB = 'advanced_research_lab',
-  POWER_PLANT = 'power_plant', // New facility for energy production
+  RESEARCH_OUTPOST = 'research_outpost', // Basic facility for generating research points
+  RESOURCE_EXTRACTOR = 'resource_extractor', // Generic extractor for basic regional resources (not specific hex nodes)
+  STRATEGIC_RESOURCE_NODE = 'strategic_resource_node', // Facility to tap into a specific strategic resource on a hexagon
+  DEFENSE_PLATFORM = 'defense_platform', // Provides regional defense and stability
+  ADVANCED_RESEARCH_LAB = 'advanced_research_lab', // Upgraded research facility
+  POWER_PLANT = 'power_plant', // Generates energy, crucial for many advanced facilities
+  // Potential future facilities:
+  // ORBITAL_SHIPYARD = 'orbital_shipyard',
+  // PROPAGANDA_TOWER = 'propaganda_tower',
+  // INTELLIGENCE_CENTER = 'intelligence_center',
+  // TERRAFORMING_STATION = 'terraforming_station'
 }
 
+// Defines the direct effects a facility has, such as resource generation or stability modification.
 export interface FacilityEffect {
-  resourceYield?: Record<string, number>; // e.g., { research: 5 }
-  stabilityModifier?: number;
+  resourceYield?: Partial<Record<StrategicResourceType | string, number>>; // e.g., { research: 5, [StrategicResourceType.RARE_METALS]: 0.1 }
+  stabilityModifier?: number; // Direct modifier to regional stability per tick
   // other potential effects...
+  // defenseBonus?: number; // Contribution to a defense score
+  // environmentalImpact?: number; // Positive or negative impact on environment
 }
 
+// Defines the structure for all facility types in the game.
+// This includes their costs, effects, upgrade paths, and economic impact on the region.
 export interface PlanetaryFacilityDefinition {
   name: string;
   description: string;
-  cost: Record<string, number>; // e.g., { credits: 100, materials: 50 }
-  effects: FacilityEffect[]; // Effects this facility provides (e.g., per turn/tick)
+  cost: Partial<Record<StrategicResourceType | string, number>>; // e.g., { credits: 100, [StrategicResourceType.RARE_METALS]: 50 }
+  effects: FacilityEffect[]; // Direct effects this facility provides (e.g., resource yield per tick)
   visual?: string; // Key for 3D model or icon
-  maxPerRegion?: number;
-  maxGlobal?: number;
-  constructionTime?: number; // Time in seconds (or game ticks) to build the facility
+  maxPerRegion?: number; // Maximum number of this facility type allowed per region for a single player
+  maxGlobal?: number; // Maximum number of this facility type allowed globally for a single player
+  constructionTime?: number; // Time in game ticks (e.g., seconds) to build the facility
   upgrades?: {
-    toFacilityType: FacilityType;
-    cost: Record<string, number>; // Cost to perform this specific upgrade
-    techRequired?: string; // TechId from Technology.ts
+    toFacilityType: FacilityType; // The facility type this can be upgraded into
+    cost: Partial<Record<StrategicResourceType | string, number>>; // Cost to perform this specific upgrade
+    techRequired?: string; // TechId from Technology.ts required for this upgrade
     constructionTime?: number; // Optional: time this upgrade takes, distinct from initial construction
   }[];
-  economicImpact?: { // Optional field for economic effects on the region
-    gdpBoost?: number; // Flat boost to GDP per tick
-    gdpMultiplier?: number; // Multiplicative boost to GDP (e.g., 1.05 for 5% boost)
-    productionModifier?: Partial<Record<StrategicResourceType, number>>; // e.g., { RARE_METALS: 1.1 } for 10% boost
-    demandModifier?: Partial<Record<StrategicResourceType, number>>; // e.g., { ANTIMATTER_CELLS: 0.9 } for 10% reduction in demand
+  economicImpact?: { // Defines how this facility influences the broader regional economy (beyond direct player resource yield)
+    gdpBoostPerTick?: number; // Flat boost to regional GDP per game tick
+    gdpMultiplier?: number; // Multiplicative boost to regional GDP (e.g., 1.05 for 5% boost, applied once or per tick based on engine logic)
+    regionalProductionModifier?: Partial<Record<StrategicResourceType, number>>; // Modifies the region's base production of strategic resources. e.g., { RARE_METALS: 1.1 } for a 10% boost.
+    regionalDemandModifier?: Partial<Record<StrategicResourceType, number>>; // Modifies the region's base demand for strategic resources. e.g., { ANTIMATTER_CELLS: 0.9 } for a 10% reduction in demand.
+    // employmentChange?: number; // Change in regional employment figures
+    // pollutionOutput?: number; // Amount of pollution generated per tick
   };
+  maintenanceCost?: Partial<Record<StrategicResourceType | string, number>>; // Resources consumed per tick for upkeep
 }
 
+// Defines the types of regional development programs a player can initiate.
+export enum RegionalDevelopmentProgramType {
+  INDUSTRIAL_EXPANSION = 'industrial_expansion',
+  ECOLOGICAL_RESTORATION = 'ecological_restoration',
+  SOCIAL_WELFARE_PROGRAM = 'social_welfare_program',
+  TECHNOLOGICAL_ADVANCEMENT_HUB = 'technological_advancement_hub',
+}
+
+// Defines the effects and costs of a regional development program.
+export interface RegionalDevelopmentProgramDefinition {
+  name: string;
+  description: string;
+  cost: Partial<Record<StrategicResourceType | string, number>>; // Cost to initiate
+  durationTicks: number; // How many game ticks the program actively runs and applies its primary effects
+  effectsPerTick?: Partial<RegionalEffects>; // Effects applied each tick while active
+  oneTimeEffects?: Partial<RegionalEffects>; // Effects applied once upon initiation or completion
+  longTermRegionalModifiers?: { // Lingering modifiers after program completion
+    gdpGrowthRateModifier?: number; // e.g., +0.001 to base GDP growth
+    stabilityModifier?: number;     // e.g., -0.05 to stability per tick (simulating unrest)
+    environmentRecoveryRate?: number; // e.g., +0.01 to environment per tick
+    pollutionOutputModifier?: number; // e.g., +0.1 pollution per tick from this program's legacy
+  };
+  // Chance to trigger specific positive or negative events upon completion or during its operation
+  eventTriggers?: {
+    eventType: EventType;
+    chance: number; // 0-1
+    delayTicks?: number; // Delay after program start or end
+    isNegativeEvent?: boolean; // To quickly identify if it's a downside
+  }[];
+}
+
+// Defines the types of strategic policies a player can enact.
+export enum PolicyType {
+  SUSTAINABLE_DEVELOPMENT = 'sustainable_development',
+  AGGRESSIVE_RESOURCE_EXPLOITATION = 'aggressive_resource_exploitation',
+  RAPID_MILITARIZATION = 'rapid_militarization',
+  OPEN_SOCIETY = 'open_society', // Focus on research, global collaboration, stability
+  CLOSED_SOCIETY = 'closed_society', // Focus on defense, internal control, slower research but more resilient to some threats
+}
+
+// Defines the effects, costs, and requirements of a strategic policy.
+export interface PolicyDefinition {
+  name: string;
+  description: string;
+  adoptionCost?: Partial<Record<StrategicResourceType | string, number>>; // One-time cost to enact
+  maintenanceCostPerTick?: Partial<Record<StrategicResourceType | string, number>>; // Ongoing upkeep
+  // Modifiers applied globally to the player or to all their controlled regions
+  globalPlayerModifiers?: {
+    resourceIncomeModifier?: Partial<Record<StrategicResourceType | string, number>>; // e.g., { credits: 0.9 } for -10%
+    researchSpeedModifier?: number; // e.g., 1.1 for +10%
+    facilityUpkeepModifier?: number; // e.g., 0.8 for 20% less upkeep on all facilities
+    diplomaticInfluenceModifier?: number; // Abstract modifier for future diplomacy systems
+  };
+  // Modifiers applied to all regions controlled by the player
+  regionalModifiers?: {
+    stabilityBonusPerTick?: number;
+    environmentChangePerTick?: number;
+    healthChangePerTick?: number;
+    facilityConstructionSpeedModifier?: number; // e.g., 1.2 for 20% faster
+    pollutionFromIndustryModifier?: number; // e.g., 0.75 for 25% less pollution
+  };
+  // Specific tech tree boosts or event resistances/vulnerabilities
+  techResearchBoosts?: Partial<Record<string, number>>; // { techCategoryOrId: 1.1 } for +10% speed
+  eventEffectModifiers?: {
+    eventType: EventType;
+    severityModifier?: number; // e.g., 0.8 to reduce severity by 20%
+    durationModifier?: number; // e.g., 1.2 to increase duration by 20%
+  }[];
+  mutuallyExclusivePolicies?: PolicyType[]; // Policies that cannot be active at the same time
+}
+
+// Central registry for all facility definitions.
+// This allows for easy addition and modification of facility types.
 export const FACILITY_DEFINITIONS: Record<FacilityType, PlanetaryFacilityDefinition> = {
   [FacilityType.RESEARCH_OUTPOST]: {
     name: 'Research Outpost',
-    description: 'Generates research points over time.',
+    description: 'Generates research points over time. Can be upgraded to an Advanced Research Lab.',
     cost: { credits: 100 },
-    effects: [
-      { resourceYield: { research: 0.1 } }
-    ],
+    effects: [{ resourceYield: { research: 0.1 } }],
     visual: 'research_dome',
-    maxPerRegion: 3, // Allow a few basic ones
+    maxPerRegion: 3,
+    constructionTime: 10,
     upgrades: [
       {
-        toFacilityType: FacilityType.ADVANCED_RESEARCH_LAB, // New facility type needed
+        toFacilityType: FacilityType.ADVANCED_RESEARCH_LAB,
         cost: { credits: 300, research: 100, [StrategicResourceType.DATA_CONDUITS]: 5 },
-        techRequired: "appliedCybernetics" // Example tech prerequisite
+        techRequired: "appliedCybernetics",
+        constructionTime: 20,
       }
-    ]
+    ],
+    economicImpact: {
+      regionalDemandModifier: { [StrategicResourceType.DATA_CONDUITS]: 1.01 } // Slightly increases demand for data conduits
+    },
+    maintenanceCost: { energy: 0.02 }
   },
-  // We'll need to define ADVANCED_RESEARCH_LAB and other potential upgraded facilities
-  [FacilityType.ADVANCED_RESEARCH_LAB]: { // Define the new upgraded facility
+  [FacilityType.ADVANCED_RESEARCH_LAB]: {
     name: 'Advanced Research Lab',
     description: 'Significantly boosts research point generation and enables advanced projects.',
-    cost: { credits: 500, research: 200, [StrategicResourceType.DATA_CONDUITS]: 10 }, // Cost if built directly (perhaps higher or not directly buildable)
-    effects: [
-      { resourceYield: { research: 0.5 } } // Higher research yield
-    ],
-    visual: 'advanced_research_lab_visual', // Needs a new visual key
-    maxPerRegion: 1, // Only one advanced lab per region
-    // Could have further upgrades or be a terminal upgrade
+    cost: { credits: 500, research: 200, [StrategicResourceType.DATA_CONDUITS]: 10 },
+    effects: [{ resourceYield: { research: 0.5 } }],
+    visual: 'advanced_research_lab_visual',
+    maxPerRegion: 1,
+    constructionTime: 30,
+    economicImpact: {
+        gdpBoostPerTick: 0.1,
+        regionalDemandModifier: { [StrategicResourceType.DATA_CONDUITS]: 1.05, [StrategicResourceType.EXOTIC_ISOTOPES]: 1.02 }
+    },
+    maintenanceCost: { credits: 0.1, energy: 0.1, [StrategicResourceType.RARE_METALS]: 0.01 }
   },
-  [FacilityType.RESOURCE_EXTRACTOR]: { // This remains a generic extractor for regional (non-hex specific) resources
+  [FacilityType.RESOURCE_EXTRACTOR]: {
     name: 'Regional Resource Extractor',
-    description: 'Extracts basic resources from the region. Does not require a specific hex node.',
-    cost: { credits: 150 }, // Example cost
-    effects: [
-      { resourceYield: { credits: 0.05 } }
-    ],
+    description: 'Extracts basic resources (credits) from the region. Does not require a specific hex node.',
+    cost: { credits: 150 },
+    effects: [{ resourceYield: { credits: 0.05 } }], // Yields credits directly to player
     visual: 'mining_rig_regional',
-    maxPerRegion: 2, // Can have a few of these per region
+    maxPerRegion: 2,
+    constructionTime: 15,
+    economicImpact: {
+        gdpBoostPerTick: 0.02, // Small boost to regional GDP
+        regionalProductionModifier: { [StrategicResourceType.RARE_METALS]: 1.01 } // Implies general extraction efforts might uncover some basic strategic resources for the region
+    },
+    maintenanceCost: { energy: 0.01 }
   },
   [FacilityType.STRATEGIC_RESOURCE_NODE]: {
     name: 'Strategic Resource Node',
-    description: 'Exploits a specific strategic resource found on this hexagon. Type of resource depends on the hexagon.',
-    cost: { credits: 250, research: 50 }, // Higher cost, might require research points
-    // Effects are dynamic based on the resource type of the hexagon it's built on.
-    // This will be handled in GameEngine.ts when the facility is updated.
-    // For example, if built on a RARE_METALS hex, it yields RARE_METALS.
-    effects: [
-        // Placeholder: Actual yield determined by hex resource type in GameEngine
-        // { resourceYield: { [StrategicResourceType.RARE_METALS]: 0.02 } } // Example if hardcoded
-    ],
-    visual: 'strategic_node_generic', // Could have type-specific visuals later
-    maxPerRegion: 5, // Arbitrary limit, could be 1 per hex with resource
-    // Special condition: Must be built on a hexagon with a strategic resource. This will be checked in buildFacility.
+    description: 'Exploits a specific strategic resource found on this hexagon. Yield depends on the hexagon\'s resource.',
+    cost: { credits: 250, research: 50, energy: 20 }, // Requires some energy to build
+    effects: [ /* Actual yield determined by hex resource type in GameEngine */ ],
+    visual: 'strategic_node_generic',
+    maxPerRegion: 5, // Max per region for a player, but effectively 1 per hex resource node.
+    constructionTime: 25,
+    // This facility's economic impact is primarily through the player gaining the strategic resource,
+    // but could also slightly boost related regional industries.
+    economicImpact: {
+        gdpBoostPerTick: 0.05,
+        // Example: If it's a RARE_METALS node, it might slightly increase regional production capability of it.
+        // This needs careful handling in GameEngine to link to the specific resource type.
+    },
+    maintenanceCost: { credits: 0.05, energy: 0.05 }
   },
   [FacilityType.DEFENSE_PLATFORM]: {
     name: 'Defense Platform',
-    description: 'Provides defensive capabilities to the region and contributes to global defense readiness.',
-    cost: { credits: 200, energy: 50 }, // Added energy to initial cost as well
+    description: 'Provides defensive capabilities to the region, contributes to global defense readiness, and slightly boosts stability.',
+    cost: { credits: 200, energy: 50, [StrategicResourceType.RARE_METALS]: 10 },
     effects: [
-      { stabilityModifier: 0.01 }, // Small passive stability boost per tick
-      { resourceYield: { defense: 0.1, energy: -0.05 } } // Produces defense, consumes energy for upkeep
+      { stabilityModifier: 0.002 }, // Smaller, more granular stability boost per tick
+      { resourceYield: { defense: 0.1 } } // Produces defense points for the player
     ],
     visual: 'defense_turret',
-    maxPerRegion: 1,
-    constructionTime: 20, // Takes 20 seconds to build
+    maxPerRegion: 1, // Only one major platform per region for a player
+    constructionTime: 20,
+    economicImpact: {
+        gdpBoostPerTick: 0.01, // Military spending can stimulate local economy slightly
+        regionalDemandModifier: { [StrategicResourceType.RARE_METALS]: 1.01 } // Consumes some regional metals for upkeep/ammo
+    },
+    maintenanceCost: { credits: 0.02, energy: 0.08 } // Consumes more energy
   },
   [FacilityType.POWER_PLANT]: {
     name: 'Power Plant',
-    description: 'Generates energy required for advanced facilities and operations.',
-    cost: { credits: 200 },
-    effects: [
-      { resourceYield: { energy: 0.5 } } // Produces 0.5 energy per tick (game time second)
-    ],
-    visual: 'power_plant_visual', // Needs a visual key
-    maxPerRegion: 2, // Allow a couple per region
-    constructionTime: 15, // Takes 15 seconds to build
-    economicImpact: { // Example economic impact
-      gdpBoost: 5, // Adds 5 GDP per second (assuming tickDelta of 1 per second)
-      demandModifier: { // Slightly increases demand for maintenance materials
-        [StrategicResourceType.RARE_METALS]: 1.02 // 2% increase in demand for rare metals
-      }
-    }
+    description: 'Generates energy required for advanced facilities and operations. Essential for a thriving technological base.',
+    cost: { credits: 200, [StrategicResourceType.RARE_METALS]: 5 },
+    effects: [{ resourceYield: { energy: 0.5 } }], // Produces energy for the player
+    visual: 'power_plant_visual',
+    maxPerRegion: 2,
+    constructionTime: 15,
+    economicImpact: {
+      gdpBoostPerTick: 0.03,
+      // Power plants might increase demand for fuel-like resources if those were modeled,
+      // or slightly increase local industrial activity.
+      regionalProductionModifier: { [StrategicResourceType.RARE_METALS]: 1.01 }, // e.g. better energy access helps refine metals
+      regionalDemandModifier: { [StrategicResourceType.EXOTIC_ISOTOPES]: 1.01 } // Some advanced plants might use isotopes
+    },
+    maintenanceCost: { credits: 0.03 }
   }
 };
 
