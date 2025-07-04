@@ -17,8 +17,16 @@ import {
   Heart,
   Leaf,
   ScanSearch, // For Geo Scanner
-  WifiOff // For EMP Pulse
+  WifiOff, // For EMP Pulse
+  Coins, // For Credits
+  FlaskConical, // For Research
+  Atom, // For generic strategic resources
+  Diamond, // Example for Rare Metals
+  Boxes, // Example for Data Conduits
+  Droplets, // Example for Bioprecursors
+  Sparkles // Example for Antimatter Cells or Exotic Isotopes
 } from 'lucide-react';
+import { StrategicResourceType } from '../engine/definitions'; // Import StrategicResourceType
 
 interface ContextMenuProps {
   visible: boolean;
@@ -310,7 +318,7 @@ export const TacticalOverlay: React.FC<TacticalOverlayProps> = ({
             <h1 className=\"text-xl font-bold text-red-400 military-font mb-2\">
               GLOBAL COMMAND CENTER
             </h1>
-            <div className=\"grid grid-cols-2 gap-4 text-sm\">
+            <div className=\"grid grid-cols-2 md:grid-cols-3 gap-4 text-sm\">
               <div>
                 <div className=\"text-blue-400 font-semibold\">Population</div>
                 <div className=\"text-white font-mono\">{(gameState.globalPopulation / 1000000000).toFixed(2)}B</div>
@@ -327,9 +335,43 @@ export const TacticalOverlay: React.FC<TacticalOverlayProps> = ({
                 <div className=\"text-red-400 font-semibold\">Suffering</div>
                 <div className=\"text-white font-mono\">{gameState.globalSuffering?.toFixed(1)}%</div>
               </div>
+
+              {/* Global Resources Display */}
+              <div className=\"col-span-2 md:col-span-3 mt-2 pt-2 border-t border-red-800/50\">
+                <h3 className=\"text-sm font-semibold text-amber-400 mb-1 flex items-center\"><Atom className=\"w-4 h-4 mr-1\" /> Global Resources</h3>
+                <div className=\"grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-xs\">
+                  {gameState.globalResources && (
+                    <>
+                      <div>
+                        <span className=\"text-gray-300 flex items-center\"><Coins className=\"w-3 h-3 mr-1 text-yellow-500\" /> Credits:</span>
+                        <span className=\"text-white font-mono ml-1\">{Math.floor(gameState.globalResources.credits || 0)}</span>
+                      </div>
+                      <div>
+                        <span className=\"text-gray-300 flex items-center\"><FlaskConical className=\"w-3 h-3 mr-1 text-purple-400\" /> Research:</span>
+                        <span className=\"text-white font-mono ml-1\">{Math.floor(gameState.globalResources.research || 0)}</span>
+                      </div>
+                      {Object.values(StrategicResourceType).map(resourceType => (
+                        <div key={resourceType}>
+                          <span className=\"text-gray-300 flex items-center\">
+                            {resourceType === StrategicResourceType.RARE_METALS && <Diamond className=\"w-3 h-3 mr-1 text-sky-400\" />}
+                            {resourceType === StrategicResourceType.ANTIMATTER_CELLS && <Sparkles className=\"w-3 h-3 mr-1 text-red-500\" />}
+                            {resourceType === StrategicResourceType.EXOTIC_ISOTOPES && <Sparkles className=\"w-3 h-3 mr-1 text-lime-400\" />}
+                            {resourceType === StrategicResourceType.DATA_CONDUITS && <Boxes className=\"w-3 h-3 mr-1 text-blue-400\" />}
+                            {resourceType === StrategicResourceType.BIOPRECURSORS && <Droplets className=\"w-3 h-3 mr-1 text-green-400\" />}
+                            {![StrategicResourceType.RARE_METALS, StrategicResourceType.ANTIMATTER_CELLS, StrategicResourceType.EXOTIC_ISOTOPES, StrategicResourceType.DATA_CONDUITS, StrategicResourceType.BIOPRECURSORS].includes(resourceType as StrategicResourceType) && <Atom className="w-3 h-3 mr-1 text-gray-400" />}
+                            {`${resourceType.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}:`}
+                          </span>
+                          <span className=\"text-white font-mono ml-1\">{parseFloat(String(gameState.globalResources[resourceType] || 0)).toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
           
+          {/* Orbital Status Panel - Unchanged but shown for context */}
           <div className=\"bg-black/80 border border-red-900 rounded-lg p-4 backdrop-blur-sm pointer-events-auto\">
             <div className=\"flex items-center gap-2 mb-2\">
               <SatelliteIcon className=\"w-4 h-4 text-blue-400\" />

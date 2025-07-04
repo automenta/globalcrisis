@@ -4,9 +4,13 @@ import { GameEngine, GameState, EventType, WorldRegion, RegionEvent, PlanetaryFa
 import { StrategicResourceType } from './engine/definitions';
 import { Earth3D, Satellite, ContextMenu as ContextMenuType } from './components/Earth3D';
 import { ContextMenu, TacticalOverlay } from './components/WarRoomUI';
-import { HexagonInfoPanel } from './components/HexagonInfoPanel'; // Import the new panel
+import { HexagonInfoPanel } from './components/HexagonInfoPanel';
+import { TechnologyPanel } from './components/TechnologyPanel';
+import { FacilityManagementPanel } from './components/FacilityManagementPanel'; // Import FacilityManagementPanel
+import { TechId } from './engine/Technology';
+import { FacilityType } from './engine/definitions'; // Import FacilityType for handlers
 import { Button } from '@/components/ui/button';
-import { AlertTriangle, Power } from 'lucide-react';
+import { AlertTriangle, Power, FlaskConical as TechIcon, Building as FacilityIcon } from 'lucide-react'; // Added FacilityIcon
 
 interface HexagonDetailsForPanel {
   id: string;
@@ -109,7 +113,12 @@ export default function GlobalCrisisSimulator() {
   const [hexagonPanelPosition, setHexagonPanelPosition] = useState({ x: 0, y: 0 });
   const [isInitialized, setIsInitialized] = useState(false);
   const [lastEventCount, setLastEventCount] = useState(0);
-  
+  const [showTechnologyPanel, setShowTechnologyPanel] = useState(false);
+  const [showFacilityPanel, setShowFacilityPanel] = useState(false);
+  const [selectingHexForScan, setSelectingHexForScan] = useState<Satellite | null>(null);
+  const [selectingHexForBuilding, setSelectingHexForBuilding] = useState<FacilityType | null>(null);
+  const [appTargetedHexIdForBuild, setAppTargetedHexIdForBuild] = useState<string | null>(null); // Hex ID selected on map for building
+
   // Initialize game systems
   useEffect(() => {
     if (!canvasContainerRef.current) return;
@@ -185,6 +194,39 @@ export default function GlobalCrisisSimulator() {
 
         // Close context menu if it's open
         setContextMenu(prev => ({ ...prev, visible: false }));
+
+        // If in "select hex for scan" mode
+        if (selectingHexForScan && gameEngineRef.current && gameState) {
+          const satellite = selectingHexForScan;
+          setSelectingHexForScan(null); // Exit mode
+          const res = gameEngineRef.current.performGeoScan(gameState, satellite.id, hexagonId);
+          if (res.success && res.newState) {
+            setGameState(res.newState);
+            audioRef.current?.playAlert('success');
+            // Update panel if open for this hex
+            if (selectedHexagonDetails && selectedHexagonDetails.id === hexagonId) {
+                 setSelectedHexagonDetails(prev => prev ? ({...prev, strategicResource: res.revealedResource }) : null);
+            }
+          } else {
+            audioRef.current?.playAlert('warning');
+            alert(`GeoScan failed: ${res.message}`);
+          }
+          return; // End click handling here for scan mode
+        }
+
+        // If in "select hex for building" mode
+        if (selectingHexForBuilding && gameEngineRef.current && gameState) {
+            console.log(`Hexagon ${hexagonId} selected for building ${selectingHexForBuilding}.`);
+            setAppTargetedHexIdForBuild(hexagonId); // Pass this to FacilityManagementPanel via prop
+            setSelectingHexForBuilding(null); // Exit mode
+            setShowFacilityPanel(true); // Ensure facility panel is open to receive the hex ID
+            // Note: The HexagonInfoPanel will still open due to setSelectedHexagonDetails above.
+            // This might be okay, or we might want to prevent it if in building selection mode.
+            // For now, let's allow both. The user can close the info panel.
+            return; // End click handling
+        }
+
+
       };
 
       setIsInitialized(true);
@@ -206,8 +248,19 @@ export default function GlobalCrisisSimulator() {
     };
   }, []);
   
-  // Game loop
+  // Game loop & other useEffects that depend on gameState
   useEffect(() => {
+    // Update Earth3D visuals when gameState changes, especially for hex resources
+    if (earth3DRef.current && gameState) {
+      earth3DRef.current.updateHexagonVisuals(gameState.scannedHexes, gameState.hexagonStrategicResources as Record<string, string | null>);
+      // Consider if facility visuals also need updating here or if they are handled by their own flow
+      // For now, let's assume GameEngine state changes trigger re-renders that pass new props.
+      // However, direct calls for imperative updates to Three.js objects are often needed.
+      // earth3DRef.current.updateFacilityVisuals(gameState.activeFacilities, earth3DRef.current.getHexagonsData(), gameState.regions);
+      // The getHexagonsData() would need to be a new public method in Earth3D if we go this route.
+      // For now, focusing on scanned hexes.
+    }
+
     if (!gameState || !gameState.running || !gameEngineRef.current) return;
     
     let lastTime = performance.now();
@@ -318,7 +371,7 @@ export default function GlobalCrisisSimulator() {
   const handleContextMenuAction = useCallback((action: string, target?: any) => {
     if (!gameEngineRef.current || !gameState || !earth3DRef.current) return;
     
-    let newState = { ...gameState };
+    let currentGameState = { ...gameState }; // Use a mutable copy for this handler
     let pan = 0;
     let alertType: 'warning' | 'critical' | 'success' = 'warning'; // Default alert type
 
@@ -345,13 +398,51 @@ export default function GlobalCrisisSimulator() {
     switch (action) {
       case 'deploy':
         if (target?.type && target?.region) {
-          newState = gameEngineRef.current.triggerEvent(newState, target.type, target.region.id);
+          const resultState = gameEngineRef.current.triggerEvent(currentGameState, target.type, target.region.id);
           const definition = gameEngineRef.current.getThreatDefinition(target.type as EventType);
           alertType = definition && (definition.effects.health && definition.effects.health > 0 || definition.effects.environment && definition.effects.environment > 0) ? 'success' : 'critical';
           audioRef.current?.playAlert(alertType, pan);
+          currentGameState = resultState; // Update currentGameState with the result
         }
         break;
-        
+
+      case 'geo_scan_area': // Assuming this is the action from satellite context menu
+        if (target?.id && selectedHexagonDetails?.id) { // target is satellite, selectedHexagonDetails for target hex
+            const res = gameEngineRef.current.performGeoScan(currentGameState, target.id, selectedHexagonDetails.id);
+            if (res.success && res.newState) {
+                currentGameState = res.newState;
+                audioRef.current?.playAlert('success', pan);
+                // Update HexagonInfoPanel if it's open for the scanned hex
+                if (selectedHexagonDetails && selectedHexagonDetails.id === res.newState.scannedHexes?.[res.newState.scannedHexes.length-1]) { // A bit fragile way to check last scanned
+                    setSelectedHexagonDetails(prev => prev ? ({
+                        ...prev,
+                        strategicResource: res.revealedResource
+                    }) : null);
+                }
+                 // Earth3D will be updated by the useEffect watching gameState
+            } else {
+                audioRef.current?.playAlert('warning', pan);
+                // console.warn(res.message); // Optionally show message to user
+            }
+        } else if (target?.id && !selectedHexagonDetails?.id) {
+            // If no hex is selected, prompt user or make it area-based scan
+            // For now, requires a selected hex. Could also use onHexagonClick to set a "scanTargetHex" state.
+            console.log("GeoScan action initiated by satellite, but no target hexagon selected on map.");
+            // TODO: Implement a mode to select a hex for scanning after clicking the button.
+            // This might involve setting a state like `isScanningMode = true`
+            // For now, set the app state to wait for a hex click
+            setSelectingHexForScan(target as Satellite); // target is the satellite
+            audioRef.current?.playAlert('success', pan); // Indicate mode change
+            alert("GeoScanner Activated: Click on a hexagon on the globe to scan.");
+            // Close context menu as the next click is for targeting
+            setContextMenu(prev => ({ ...prev, visible: false }));
+        } else {
+             audioRef.current?.playAlert('warning', pan);
+             alert("GeoScan can only be initiated by a GeoScanner satellite.");
+        }
+        // Do not set currentGameState here, as it will be set after hex selection
+        return; // Return early as we are entering a selection mode
+
       case 'hack':
         if (target && earth3DRef.current) {
           earth3DRef.current.compromiseSatellite(target.id);
@@ -388,7 +479,63 @@ export default function GlobalCrisisSimulator() {
         break;
     }
     
-    setGameState(newState);
+    setGameState(currentGameState); // Set the final state after all actions
+  }, [gameState, selectedHexagonDetails]); // Added selectedHexagonDetails as dependency
+
+  const handleStartResearch = useCallback((techId: TechId) => {
+    if (!gameEngineRef.current || !gameState) return;
+    const result = gameEngineRef.current.startResearch(gameState, techId);
+    if (result.success && result.newState) {
+      setGameState(result.newState);
+      audioRef.current?.playAlert('success');
+      // console.log(`Started research on ${techId}`);
+    } else {
+      audioRef.current?.playAlert('warning');
+      // console.warn(`Failed to start research on ${techId}: ${result.message}`);
+      // Optionally, show a toast or notification to the user with result.message
+    }
+  }, [gameState]);
+
+  const handleInitiateHexSelectionForBuilding = useCallback((facilityType: FacilityType) => {
+    setSelectingHexForBuilding(facilityType);
+    setAppTargetedHexIdForBuild(null); // Clear any previously targeted hex
+    // Close other panels that might interfere with map selection
+    setShowTechnologyPanel(false);
+    setContextMenu(prev => ({ ...prev, visible: false }));
+    setSelectedHexagonDetails(null);
+    // Alert or UI indication that player should click a hex
+    alert(`Select a hexagon on the globe to place the ${facilityType.replace('_', ' ')}.`);
+  }, []);
+
+  const handleClearTargetedHexIdForBuild = useCallback(() => {
+    setAppTargetedHexIdForBuild(null);
+  }, []);
+
+  const handleBuildFacility = useCallback((facilityType: FacilityType, regionId: string, hexagonId?: string) => {
+    if (!gameEngineRef.current || !gameState) return;
+    const result = gameEngineRef.current.buildFacility(gameState, facilityType, regionId, hexagonId);
+    if (result.success && result.newState) {
+      setGameState(result.newState);
+      audioRef.current?.playAlert('success');
+      // console.log(`Building ${facilityType} in ${regionId}` + (hexagonId ? ` on ${hexagonId}` : ""));
+    } else {
+      audioRef.current?.playAlert('warning');
+      // console.warn(`Failed to build ${facilityType}: ${result.message}`);
+      // Optionally, show a toast to the user with result.message
+    }
+  }, [gameState]);
+
+  const handleUpgradeFacility = useCallback((facilityId: string, toFacilityType: FacilityType) => {
+    if (!gameEngineRef.current || !gameState) return;
+    const result = gameEngineRef.current.upgradeFacility(gameState, facilityId, toFacilityType);
+    if (result.success && result.newState) {
+      setGameState(result.newState);
+      audioRef.current?.playAlert('success');
+      // console.log(`Upgraded facility ${facilityId} to ${toFacilityType}`);
+    } else {
+      audioRef.current?.playAlert('warning');
+      // console.warn(`Failed to upgrade facility ${facilityId}: ${result.message}`);
+    }
   }, [gameState]);
   
   const handleModeChange = useCallback((mode: 'chaos' | 'peace' | 'neutral') => {
@@ -452,6 +599,37 @@ export default function GlobalCrisisSimulator() {
         onReset={handleReset}
       />
       
+      {/* War Room Interface Overlay - moved TacticalOverlay to be wrapped for button */}
+      <div className="absolute top-0 left-0 right-0 bottom-0 pointer-events-none z-10">
+        <TacticalOverlay
+          gameState={gameState}
+          onModeChange={handleModeChange}
+          onSpeedChange={handleSpeedChange}
+          onTogglePlay={handleTogglePlay}
+          onReset={handleReset}
+        />
+        {/* Button to toggle Technology Panel */}
+        <Button
+          variant="outline"
+          size="default" // Adjusted size for better visibility
+          className="absolute top-40 left-4 pointer-events-auto military-font bg-black/70 border-red-700 hover:bg-red-800/70 text-red-300 hover:text-white"
+          onClick={() => setShowTechnologyPanel(true)}
+        >
+          <TechIcon className="w-5 h-5 mr-2" />
+          Technology
+        </Button>
+        {/* Button to toggle Facility Panel */}
+        <Button
+          variant="outline"
+          size="default"
+          className="absolute top-52 left-4 pointer-events-auto military-font bg-black/70 border-red-700 hover:bg-red-800/70 text-red-300 hover:text-white"
+          onClick={() => setShowFacilityPanel(true)}
+        >
+          <FacilityIcon className="w-5 h-5 mr-2" />
+          Facilities
+        </Button>
+      </div>
+
       {/* Context Menu */}
       <ContextMenu
         visible={contextMenu.visible}
@@ -470,6 +648,29 @@ export default function GlobalCrisisSimulator() {
           hexagon={selectedHexagonDetails}
           onClose={() => setSelectedHexagonDetails(null)}
           position={hexagonPanelPosition}
+          onBuildFacility={(facilityType, regionId, hexagonId) => { /* TODO: Implement or pass handler */ console.log("Build request from hex panel:", facilityType, regionId, hexagonId);}}
+        />
+      )}
+
+      {/* Technology Panel */}
+      {showTechnologyPanel && gameState && (
+        <TechnologyPanel
+          gameState={gameState}
+          onStartResearch={handleStartResearch}
+          onClose={() => setShowTechnologyPanel(false)}
+        />
+      )}
+
+      {/* Facility Management Panel */}
+      {showFacilityPanel && gameState && (
+        <FacilityManagementPanel
+          gameState={gameState}
+          onBuildFacility={handleBuildFacility}
+          onUpgradeFacility={handleUpgradeFacility}
+          onClose={() => setShowFacilityPanel(false)}
+          onInitiateHexSelectionForBuilding={handleInitiateHexSelectionForBuilding}
+          targetedHexIdForBuild={appTargetedHexIdForBuild}
+          clearTargetedHexIdForBuild={handleClearTargetedHexIdForBuild}
         />
       )}
       

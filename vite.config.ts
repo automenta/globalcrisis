@@ -1,7 +1,8 @@
+/// <reference types="vitest" />
 import path from "path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig } from "vite"; // Keep if it's compatible, or use vitest/config
 
 // Custom plugin to inject "built by scout" tag
 function injectBuiltByScoutPlugin() {
@@ -24,5 +25,11 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+  },
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: [], // Can add setup files here if needed later e.g. './src/testSetup.ts'
+    css: false, // Disable CSS processing for tests if not needed, can speed up
   },
 });

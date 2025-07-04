@@ -65,6 +65,8 @@ export class Earth3D {
   private hexagons: { id: string, center: THREE.Vector3, vertices: THREE.Vector3[] }[] = [];
   private selectedHexagonMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, side: THREE.DoubleSide });
   private selectedHexagonMesh?: THREE.Mesh;
+  private strategicResourceMarkers: THREE.Group = new THREE.Group(); // Group to hold resource icons/markers
+  private resourceMarkerMaterials: Record<string, THREE.SpriteMaterial> = {};
 
 
   constructor(container: HTMLElement) {
@@ -85,6 +87,7 @@ export class Earth3D {
     this.createSatellites();
     this.createHexagonGridData(2); // Adjust detail level as needed
     this.visualizeHexagonGrid();
+    this.scene.add(this.strategicResourceMarkers); // Add group to scene
     this.setupControls();
     this.setupEventListeners(container);
     this.animate();
@@ -904,16 +907,16 @@ export class Earth3D {
   }
 
   public highlightHexagon(hex: { id: string, center: THREE.Vector3, vertices: THREE.Vector3[] } | null) {
-    if (!this.selectedHexagonMesh) {
-      // Create the mesh once
+    if (!this.selectedHexagonMesh) { // Ensure selectedHexagonMesh is created if it doesn't exist
       const initialGeometry = new THREE.BufferGeometry(); // Empty initially
+      const initialGeometry = new THREE.BufferGeometry();
       this.selectedHexagonMesh = new THREE.Mesh(initialGeometry, this.selectedHexagonMaterial);
       this.selectedHexagonMesh.name = "SelectedHexagon";
-      this.selectedHexagonMesh.visible = false; // Start hidden
+      this.selectedHexagonMesh.visible = false;
       this.scene.add(this.selectedHexagonMesh);
     }
 
-    if (hex && hex.vertices.length === 6) {
+    if (hex && hex.vertices.length === 6 && this.selectedHexagonMesh) { // Check if selectedHexagonMesh exists
       const vertices = [];
       for (let i = 0; i < hex.vertices.length; ++i) {
         vertices.push(hex.vertices[i].x, hex.vertices[i].y, hex.vertices[i].z);
@@ -934,9 +937,70 @@ export class Earth3D {
 
       this.selectedHexagonMesh.geometry = newGeometry;
       this.selectedHexagonMesh.visible = true;
-    } else {
+    } else if (this.selectedHexagonMesh) { // Check if selectedHexagonMesh exists before accessing visible
       this.selectedHexagonMesh.visible = false;
     }
+  }
+
+  // Method to create/update visual markers for strategic resources
+  public updateHexagonVisuals(
+    scannedHexIds: string[] | undefined, // Changed from Set<string> to string[] for easier state management if needed
+    hexagonStrategicResources: Record<string, string | null> // Assuming string is StrategicResourceType
+  ) {
+    this.strategicResourceMarkers.clear(); // Clear old markers
+
+    if (!scannedHexIds || !hexagonStrategicResources) return;
+
+    const scannedSet = new Set(scannedHexIds);
+
+    this.hexagons.forEach(hex => {
+      if (scannedSet.has(hex.id)) {
+        const resourceType = hexagonStrategicResources[hex.id];
+        if (resourceType) {
+          let material = this.resourceMarkerMaterials[resourceType];
+          if (!material) {
+            // Create a simple procedural texture for the resource type
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const context = canvas.getContext('2d');
+            if (context) {
+              context.beginPath();
+              context.arc(32, 32, 28, 0, 2 * Math.PI, false);
+              // Simple color coding for resource types - can be expanded
+              switch (resourceType) {
+                case 'rare_metals': context.fillStyle = 'rgba(100, 100, 200, 0.8)'; break;
+                case 'antimatter_cells': context.fillStyle = 'rgba(255, 0, 255, 0.8)'; break;
+                case 'exotic_isotopes': context.fillStyle = 'rgba(0, 255, 0, 0.8)'; break;
+                case 'data_conduits': context.fillStyle = 'rgba(255, 255, 0, 0.8)'; break;
+                case 'bioprecursors': context.fillStyle = 'rgba(0, 200, 200, 0.8)'; break;
+                default: context.fillStyle = 'rgba(128, 128, 128, 0.8)';
+              }
+              context.fill();
+              context.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+              context.lineWidth = 4;
+              context.stroke();
+              // Add a letter or symbol
+              context.fillStyle = 'white';
+              context.font = 'bold 24px Arial';
+              context.textAlign = 'center';
+              context.textBaseline = 'middle';
+              context.fillText(resourceType.substring(0, 2).toUpperCase(), 32, 32);
+            }
+            const texture = new THREE.CanvasTexture(canvas);
+            material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
+            this.resourceMarkerMaterials[resourceType] = material;
+          }
+
+          const sprite = new THREE.Sprite(material);
+          sprite.position.copy(hex.center).multiplyScalar(1.01); // Slightly above the hex center
+          const scale = 0.05 * this.earth.geometry.parameters.radius; // Scale based on Earth size
+          sprite.scale.set(scale, scale, scale);
+          sprite.userData.isResourceMarker = true;
+          this.strategicResourceMarkers.add(sprite);
+        }
+      }
+    });
   }
   
   public updateRegionData(regions: WorldRegion[]) {
