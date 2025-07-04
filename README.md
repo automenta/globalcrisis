@@ -7,7 +7,7 @@ This is a [Vite](https://vite.dev) project bootstrapped with React + TypeScript 
 First, run the development server:
 
 ```bash
-bun dev
+npm run dev
 ```
 
 Open [http://localhost:5173](http://localhost:5173) with your browser to see the result.
@@ -18,11 +18,10 @@ You can start editing the page by modifying `src/App.tsx`. The page auto-updates
 
 ### Package Management
 
-This project uses [Bun](https://bun.sh/) as the package manager:
+This project uses [npm](https://www.npmjs.com/) as the package manager:
 
-- Install dependencies: `bun add <package-name>`
-- Run scripts: `bun <script-name>`
-- Manage dev dependencies: `bun add -d <package-name>`
+- Install dependencies: `npm install <package-name>` or `npm install --save-dev <package-name>` for dev dependencies.
+- Run scripts: `npm run <script-name>`
 
 ### Theme Customization
 
@@ -123,13 +122,13 @@ To change or update fonts:
 Build the project:
 
 ```bash
-bun run build
+npm run build
 ```
 
 Preview the production build:
 
 ```bash
-bun run preview
+npm run preview
 ```
 
 The built files will be in the `dist` directory, ready for deployment to any static hosting service.

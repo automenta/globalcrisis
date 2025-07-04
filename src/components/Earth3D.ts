@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GameState, WorldRegion, RegionEvent, EventType, Faction, Ideology } from '../engine/GameEngine'; // Added Faction, Ideology
+import SimplexNoise from 'simplex-noise';
 
 export interface Satellite {
   id: string;
@@ -186,41 +187,97 @@ export class Earth3D {
   }
   
   private createEarthTexture(ctx: CanvasRenderingContext2D, width: number, height: number) {
-    // Create a procedural earth-like texture
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
-    
-    for (let i = 0; i < width; i++) {
-      for (let j = 0; j < height; j++) {
+    const simplex = new SimplexNoise();
+
+    // Helper function to map noise value to color
+    const getColor = (elevation: number, moisture: number) => {
+      if (elevation < -0.1) { // Deep Ocean
+        return [10, 20, 80 + elevation * 200]; // Darker blue
+      } else if (elevation < 0.05) { // Shallow Ocean / Coast
+        return [20, 80, 150 + elevation * 400]; // Lighter blue
+      } else if (elevation < 0.15) { // Beach / Lowland
+        if (moisture > 0.3) return [139, 178, 102]; // Lush Lowland Green
+        return [210, 180, 140]; // Tan sand
+      } else if (elevation < 0.4) { // Plains / Forests
+        if (moisture > 0.5) return [34, 139, 34]; // Forest Green
+        if (moisture > 0.1) return [124, 252, 0]; // Grassland Green
+        return [188, 143, 143]; // Dry plains / light brown
+      } else if (elevation < 0.6) { // Hills / Light Mountains
+        if (moisture > 0.3) return [85, 107, 47]; // Dark Olive Green (Forested Hills)
+        return [139, 119, 101]; // Brownish grey rock
+      } else if (elevation < 0.8) { // Mountains
+        return [100, 100, 100]; // Grey rock
+      } else { // Snowy Peaks
+        return [220, 220, 220]; // White snow
+      }
+    };
+
+    for (let j = 0; j < height; j++) { // y, latitude
+      for (let i = 0; i < width; i++) { // x, longitude
         const index = (j * width + i) * 4;
+
+        // Convert pixel coordinates to 3D coordinates on a sphere for noise input
+        // This gives better results than direct lat/lon for simplex noise on a sphere
+        const u = i / width;
+        const v = j / height;
+        const lon = u * 2 * Math.PI;
+        const lat = (v - 0.5) * Math.PI;
+
+        // Sphere mapping for noise (prevents pinching at poles)
+        const x = Math.cos(lat) * Math.cos(lon);
+        const y = Math.cos(lat) * Math.sin(lon);
+        const z = Math.sin(lat);
         
-        // Convert to lat/lon
-        const lon = (i / width) * 2 * Math.PI - Math.PI;
-        const lat = (j / height) * Math.PI - Math.PI / 2;
-        
-        // Noise for terrain
-        const noise1 = Math.sin(lat * 8) * Math.cos(lon * 6);
-        const noise2 = Math.sin(lat * 16) * Math.cos(lon * 12) * 0.5;
-        const elevation = noise1 + noise2;
-        
-        if (elevation > 0.2) {
-          // Land - browns and greens
-          data[index] = 34 + Math.random() * 40;     // R
-          data[index + 1] = 80 + Math.random() * 60; // G
-          data[index + 2] = 20 + Math.random() * 30; // B
-        } else {
-          // Ocean - blues
-          data[index] = 10 + Math.random() * 20;     // R
-          data[index + 1] = 50 + Math.random() * 40; // G
-          data[index + 2] = 120 + Math.random() * 80; // B
+        // Multiple octaves of Simplex noise for elevation
+        let elevation = 0;
+        let frequency = 2.5; // Base frequency for continents
+        let amplitude = 1;
+        let lacunarity = 2.0; // How much detail is added with each octave
+        let persistence = 0.5; // How much amplitude is reduced for each octave
+
+        for (let o = 0; o < 6; o++) { // 6 octaves of noise
+          elevation += simplex.noise3D(x * frequency, y * frequency, z * frequency) * amplitude;
+          frequency *= lacunarity;
+          amplitude *= persistence;
         }
-        data[index + 3] = 255; // A
+        // Normalize elevation to roughly -1 to 1, then scale for desired features
+        elevation = elevation / 1.8; // Adjust divisor based on observed noise range
+
+        // Moisture map (another layer of noise)
+        let moisture = 0;
+        frequency = 1.5;
+        amplitude = 1;
+        for (let o = 0; o < 4; o++) {
+            moisture += simplex.noise3D(x * frequency + 100, y * frequency + 100, z * frequency + 100) * amplitude;
+            frequency *= lacunarity;
+            amplitude *= persistence;
+        }
+        moisture = (moisture / 1.5 + 1) / 2; // Normalize to 0-1
+
+        // Temperature based on latitude (simple gradient)
+        const temperature = 1 - Math.abs(j - height / 2) / (height / 2); // 1 at equator, 0 at poles
+        
+        // Adjust elevation for polar ice caps
+        if (temperature < 0.15 && elevation > 0) { // Cold regions with land
+           elevation = Math.max(elevation, 0.75); // Force snowy peaks for ice caps
+        }
+        if (temperature < 0.1 && elevation <= 0.05 ) { // Cold regions with ocean
+            elevation = 0.75; // Ice sheets over ocean
+        }
+
+
+        const [r, g, b] = getColor(elevation, moisture);
+        data[index] = r;
+        data[index + 1] = g;
+        data[index + 2] = b;
+        data[index + 3] = 255; // Alpha
       }
     }
-    
     ctx.putImageData(imageData, 0, 0);
   }
-  
+
   private createNormalMap(ctx: CanvasRenderingContext2D, width: number, height: number) {
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
@@ -273,27 +330,44 @@ export class Earth3D {
   private createCloudTexture(ctx: CanvasRenderingContext2D, width: number, height: number) {
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
-    
-    for (let i = 0; i < width; i++) {
-      for (let j = 0; j < height; j++) {
+    const simplex = new SimplexNoise(); // Re-initialize for clouds or pass instance if preferred
+
+    for (let j = 0; j < height; j++) { // y, latitude
+      for (let i = 0; i < width; i++) { // x, longitude
         const index = (j * width + i) * 4;
+
+        const u = i / width;
+        const v = j / height;
+        const lon = u * 2 * Math.PI;
+        const lat = (v - 0.5) * Math.PI;
+
+        // Sphere mapping for noise
+        const x = Math.cos(lat) * Math.cos(lon);
+        const y = Math.cos(lat) * Math.sin(lon);
+        const z = Math.sin(lat);
+
+        // Simplex noise for cloud patterns
+        let cloudNoise = 0;
+        let frequency = 3.0; // Different frequency for clouds
+        let amplitude = 1;
+        for (let o = 0; o < 5; o++) { // Fewer octaves for softer clouds
+          cloudNoise += simplex.noise3D(x * frequency, y * frequency, z * frequency + 50) * amplitude; // Offset z for different pattern
+          frequency *= 2.0;
+          amplitude *= 0.5;
+        }
+        cloudNoise = (cloudNoise / 1.5 + 1) / 2; // Normalize to 0-1
+
+        const cloudValue = cloudNoise > 0.6 ? (cloudNoise - 0.6) / 0.4 * 200 + 55 : 0; // Threshold and scale for opacity
         
-        const lon = (i / width) * 2 * Math.PI;
-        const lat = (j / height) * Math.PI;
-        
-        const noise = Math.sin(lat * 12) * Math.cos(lon * 8) * Math.sin(lon * 4);
-        const cloud = noise > 0.3 ? 255 : 0;
-        
-        data[index] = cloud;     // R
-        data[index + 1] = cloud; // G
-        data[index + 2] = cloud; // B
-        data[index + 3] = cloud; // A
+        data[index] = 255; // R - white clouds
+        data[index + 1] = 255; // G
+        data[index + 2] = 255; // B
+        data[index + 3] = Math.max(0, Math.min(255, cloudValue)); // Alpha - cloud density
       }
     }
-    
     ctx.putImageData(imageData, 0, 0);
   }
-  
+
   private createSatellites() {
     const satelliteTypes = [
       { type: 'military', count: 8, color: 0xff0000, radius: 3.5 },
@@ -645,9 +719,9 @@ export class Earth3D {
     this.scene.add(particleSystem);
 
     // Animate particles
-    let_particle_life = 0;
+    let particle_life = 0;
     const animateParticles = () => {
-      let_particle_life += 0.01;
+      particle_life += 0.01;
       const positions = particles.attributes.position.array as Float32Array;
       for (let i = 0; i < particleCount; i++) {
         positions[i * 3 + 0] += (Math.random() - 0.5) * 0.02;
@@ -655,7 +729,7 @@ export class Earth3D {
         positions[i * 3 + 2] += (Math.random() - 0.5) * 0.02;
       }
       particles.attributes.position.needsUpdate = true;
-      pMaterial.opacity = Math.max(0, 1 - let_particle_life * 2);
+      pMaterial.opacity = Math.max(0, 1 - particle_life * 2);
 
       if (pMaterial.opacity > 0) {
         requestAnimationFrame(animateParticles);
