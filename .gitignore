@@ -1,0 +1,3 @@
+bun.*
+dist/
+node_modules

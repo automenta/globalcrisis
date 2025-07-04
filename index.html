@@ -1,0 +1,2636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Global Command Center - Crisis Simulation</title>
+    <meta name="description" content="Ultimate global crisis simulation with hexagonal regional dynamics and multi-domain operations">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Orbitron:wght@400;500;600;700;800;900&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #000;
+            color: #fff;
+            overflow: hidden;
+            user-select: none;
+            cursor: crosshair;
+        }
+        
+        #gameCanvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            background: radial-gradient(circle at center, #001122 0%, #000000 100%);
+        }
+        
+        .hud-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none;
+            z-index: 10;
+        }
+        
+        .hud-overlay > * {
+            pointer-events: auto;
+        }
+        
+        /* Main HUD Layout */
+        .main-hud {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            right: 15px;
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            gap: 20px;
+            align-items: start;
+        }
+        
+        .left-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .center-panel {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .right-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            align-items: flex-end;
+        }
+        
+        /* Global Stats */
+        .global-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 15px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+        
+        .stat-item {
+            text-align: center;
+        }
+        
+        .stat-label {
+            font-size: 10px;
+            color: #888;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .stat-value {
+            font-size: 18px;
+            font-weight: 700;
+            font-family: 'Orbitron', monospace;
+            margin-bottom: 2px;
+        }
+        
+        .stat-change {
+            font-size: 9px;
+            font-weight: 500;
+        }
+        
+        .stat-change.positive { color: #10b981; }
+        .stat-change.negative { color: #ef4444; }
+        
+        /* Selection Info */
+        .selection-info {
+            background: rgba(0, 0, 0, 0.95);
+            border: 1px solid #444;
+            border-radius: 10px;
+            padding: 15px;
+            backdrop-filter: blur(20px);
+            min-width: 280px;
+            max-width: 350px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+        }
+        
+        .selection-title {
+            font-size: 16px;
+            font-weight: 700;
+            font-family: 'Orbitron', monospace;
+            margin-bottom: 10px;
+            color: #fff;
+        }
+        
+        .selection-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        
+        .detail-item {
+            font-size: 11px;
+            color: #aaa;
+        }
+        
+        .detail-value {
+            font-weight: 600;
+            color: #fff;
+        }
+        
+        /* Command Center */
+        .command-center {
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 15px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+        
+        .command-title {
+            font-size: 14px;
+            font-weight: 600;
+            font-family: 'Orbitron', monospace;
+            margin-bottom: 12px;
+            color: #fff;
+            text-align: center;
+        }
+        
+        .mode-selector {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        
+        .mode-btn {
+            flex: 1;
+            background: linear-gradient(135deg, #374151, #1f2937);
+            border: none;
+            border-radius: 6px;
+            padding: 8px 6px;
+            color: #fff;
+            font-size: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .mode-btn.active {
+            background: linear-gradient(135deg, #dc2626, #b91c1c);
+            box-shadow: 0 4px 15px rgba(220, 38, 38, 0.4);
+        }
+        
+        .mode-btn:hover {
+            transform: translateY(-1px);
+        }
+        
+        .simulation-controls {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        
+        .sim-btn {
+            flex: 1;
+            background: linear-gradient(135deg, #4b5563, #374151);
+            border: none;
+            border-radius: 6px;
+            padding: 6px;
+            color: #fff;
+            font-size: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .sim-btn:hover {
+            background: linear-gradient(135deg, #6b7280, #4b5563);
+        }
+        
+        /* Entity Controls */
+        .entity-controls {
+            background: rgba(0, 0, 0, 0.95);
+            border: 1px solid #444;
+            border-radius: 10px;
+            padding: 15px;
+            backdrop-filter: blur(20px);
+            min-width: 300px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+        }
+        
+        .control-section {
+            margin-bottom: 15px;
+        }
+        
+        .section-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #888;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .action-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        
+        .action-btn {
+            background: linear-gradient(135deg, #dc2626, #b91c1c);
+            border: none;
+            border-radius: 6px;
+            padding: 8px 6px;
+            color: #fff;
+            font-size: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+        }
+        
+        .action-btn.positive {
+            background: linear-gradient(135deg, #059669, #047857);
+        }
+        
+        .action-btn.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .action-btn:not(.disabled):hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(220, 38, 38, 0.4);
+        }
+        
+        .action-btn.positive:not(.disabled):hover {
+            box-shadow: 0 6px 20px rgba(5, 150, 105, 0.4);
+        }
+        
+        .action-cost {
+            position: absolute;
+            top: 2px;
+            right: 4px;
+            font-size: 8px;
+            opacity: 0.7;
+        }
+        
+        /* Resource Panel */
+        .resource-panel {
+            position: absolute;
+            bottom: 15px;
+            right: 15px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 15px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+        
+        .resource-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+        
+        .resource-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+        }
+        
+        .resource-icon {
+            font-size: 20px;
+            margin-bottom: 4px;
+        }
+        
+        .resource-value {
+            font-size: 16px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            margin-bottom: 2px;
+        }
+        
+        .resource-label {
+            font-size: 9px;
+            color: #888;
+            text-transform: uppercase;
+        }
+        
+        /* Intelligence Feed */
+        .intel-feed {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            width: 320px;
+            max-height: 300px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 15px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            overflow-y: auto;
+        }
+        
+        .intel-title {
+            font-size: 12px;
+            font-weight: 600;
+            font-family: 'Orbitron', monospace;
+            margin-bottom: 12px;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .intel-item {
+            padding: 8px 0;
+            border-bottom: 1px solid #222;
+            font-size: 11px;
+            line-height: 1.4;
+        }
+        
+        .intel-item:last-child {
+            border-bottom: none;
+        }
+        
+        .intel-category {
+            color: #888;
+            font-weight: 600;
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .intel-text {
+            color: #ccc;
+            margin: 2px 0;
+        }
+        
+        .intel-timestamp {
+            color: #666;
+            font-size: 8px;
+        }
+        
+        /* Minimap */
+        .minimap {
+            position: absolute;
+            bottom: 15px;
+            left: 15px;
+            width: 200px;
+            height: 150px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 10px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+        
+        .minimap-title {
+            font-size: 10px;
+            font-weight: 600;
+            color: #888;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+        
+        .minimap-canvas {
+            width: 100%;
+            height: calc(100% - 20px);
+            border-radius: 4px;
+            background: #001122;
+        }
+        
+        /* Alert System */
+        .alert-banner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(220, 38, 38, 0.95);
+            border: 2px solid #ef4444;
+            border-radius: 15px;
+            padding: 30px 40px;
+            text-align: center;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 15px 50px rgba(220, 38, 38, 0.5);
+            animation: pulse-alert 2s infinite;
+            z-index: 50;
+        }
+        
+        @keyframes pulse-alert {
+            0%, 100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+            50% { opacity: 0.8; transform: translate(-50%, -50%) scale(1.05); }
+        }
+        
+        .alert-title {
+            font-size: 24px;
+            font-weight: 900;
+            font-family: 'Orbitron', monospace;
+            margin-bottom: 10px;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+        
+        .alert-text {
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        
+        .alert-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid #fff;
+            border-radius: 8px;
+            padding: 10px 20px;
+            color: #fff;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        
+        .alert-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        
+        /* Loading Screen */
+        .loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+        
+        .loading-title {
+            font-size: 36px;
+            font-weight: 900;
+            font-family: 'Orbitron', monospace;
+            margin-bottom: 20px;
+            color: #fff;
+            text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+        }
+        
+        .loading-subtitle {
+            font-size: 16px;
+            color: #888;
+            margin-bottom: 40px;
+        }
+        
+        .loading-bar {
+            width: 400px;
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        
+        .loading-progress {
+            height: 100%;
+            background: linear-gradient(90deg, #dc2626, #ef4444);
+            width: 0%;
+            transition: width 0.3s;
+        }
+        
+        /* Utility Classes */
+        .hidden { display: none !important; }
+        .flex { display: flex; }
+        .flex-col { flex-direction: column; }
+        .items-center { align-items: center; }
+        .justify-center { justify-content: center; }
+        .gap-2 { gap: 8px; }
+        
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.3);
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.5);
+        }
+        
+        /* Responsive Adjustments */
+        @media (max-width: 1200px) {
+            .main-hud {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto auto auto;
+            }
+            
+            .intel-feed {
+                position: relative;
+                width: 100%;
+                margin-bottom: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loadingScreen" class="loading-screen">
+        <div class="loading-title">🌍 GLOBAL COMMAND CENTER</div>
+        <div class="loading-subtitle">Initializing Planetary Defense Systems...</div>
+        <div class="loading-bar">
+            <div id="loadingProgress" class="loading-progress"></div>
+        </div>
+    </div>
+
+    <!-- Main Game Canvas -->
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- HUD Overlay -->
+    <div class="hud-overlay">
+        <!-- Main HUD Layout -->
+        <div class="main-hud">
+            <!-- Left Panel -->
+            <div class="left-panel">
+                <!-- Global Statistics -->
+                <div class="global-stats">
+                    <div class="stat-item">
+                        <div class="stat-label">🌍 Global Pop</div>
+                        <div class="stat-value" id="globalPopulation">8.0B</div>
+                        <div class="stat-change" id="populationChange"></div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">💚 Health</div>
+                        <div class="stat-value" id="globalHealth">75%</div>
+                        <div class="stat-change" id="healthChange"></div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">🌱 Environment</div>
+                        <div class="stat-value" id="globalEnvironment">60%</div>
+                        <div class="stat-change" id="environmentChange"></div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">😰 Suffering</div>
+                        <div class="stat-value" id="globalSuffering">25%</div>
+                        <div class="stat-change" id="sufferingChange"></div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">🧠 Psychology</div>
+                        <div class="stat-value" id="globalPsychology">70%</div>
+                        <div class="stat-change" id="psychologyChange"></div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">🔬 Technology</div>
+                        <div class="stat-value" id="globalTechnology">80%</div>
+                        <div class="stat-change" id="technologyChange"></div>
+                    </div>
+                </div>
+
+                <!-- Selection Info Panel -->
+                <div id="selectionInfo" class="selection-info hidden">
+                    <div class="selection-title" id="selectionTitle">No Selection</div>
+                    <div class="selection-details" id="selectionDetails"></div>
+                    <div id="selectionActions"></div>
+                </div>
+            </div>
+
+            <!-- Center Panel -->
+            <div class="center-panel">
+                <!-- Command Center -->
+                <div class="command-center">
+                    <div class="command-title">⚔️ GLOBAL COMMAND</div>
+                    
+                    <div class="mode-selector">
+                        <button class="mode-btn" id="modeDefend" onclick="setGameMode('defend')">🛡️ DEFEND</button>
+                        <button class="mode-btn active" id="modeObserve" onclick="setGameMode('observe')">👁️ OBSERVE</button>
+                        <button class="mode-btn" id="modeDestroy" onclick="setGameMode('destroy')">💥 DESTROY</button>
+                    </div>
+                    
+                    <div class="simulation-controls">
+                        <button class="sim-btn" onclick="togglePause()" id="pauseBtn">⏸️ PAUSE</button>
+                        <button class="sim-btn" onclick="changeSpeed()" id="speedBtn">⚡ 1x</button>
+                        <button class="sim-btn" onclick="resetSimulation()">🔄 RESET</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel -->
+            <div class="right-panel">
+                <!-- Intelligence Feed -->
+                <div class="intel-feed">
+                    <div class="intel-title">📡 INTELLIGENCE FEED</div>
+                    <div id="intelContainer"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Entity Controls (appears when entity selected) -->
+        <div id="entityControls" class="entity-controls hidden" style="position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%);">
+            <div class="control-section">
+                <div class="section-title">⚔️ Warfare Operations</div>
+                <div class="action-grid">
+                    <button class="action-btn" onclick="deployAction('nuclear_strike')" data-cost="500">
+                        ☢️ Nuclear Strike
+                        <span class="action-cost">500</span>
+                    </button>
+                    <button class="action-btn positive" onclick="deployAction('peace_treaty')" data-cost="300">
+                        🕊️ Peace Treaty
+                        <span class="action-cost">300</span>
+                    </button>
+                    <button class="action-btn" onclick="deployAction('bio_weapon')" data-cost="200">
+                        🦠 Bio Weapon
+                        <span class="action-cost">200</span>
+                    </button>
+                    <button class="action-btn positive" onclick="deployAction('medical_aid')" data-cost="250">
+                        💊 Medical Aid
+                        <span class="action-cost">250</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="control-section">
+                <div class="section-title">🧠 Psychological Operations</div>
+                <div class="action-grid">
+                    <button class="action-btn" onclick="deployAction('propaganda')" data-cost="150">
+                        📺 Propaganda
+                        <span class="action-cost">150</span>
+                    </button>
+                    <button class="action-btn positive" onclick="deployAction('truth_campaign')" data-cost="200">
+                        📰 Truth Campaign
+                        <span class="action-cost">200</span>
+                    </button>
+                    <button class="action-btn" onclick="deployAction('psychotropic')" data-cost="300">
+                        🧪 Psychotropic
+                        <span class="action-cost">300</span>
+                    </button>
+                    <button class="action-btn positive" onclick="deployAction('mental_health')" data-cost="250">
+                        🧘 Mental Health
+                        <span class="action-cost">250</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Resource Panel -->
+        <div class="resource-panel">
+            <div class="resource-grid">
+                <div class="resource-item">
+                    <div class="resource-icon">💰</div>
+                    <div class="resource-value" id="credits">1000</div>
+                    <div class="resource-label">Credits</div>
+                </div>
+                <div class="resource-item">
+                    <div class="resource-icon">⚡</div>
+                    <div class="resource-value" id="energy">500</div>
+                    <div class="resource-label">Energy</div>
+                </div>
+                <div class="resource-item">
+                    <div class="resource-icon">🧪</div>
+                    <div class="resource-value" id="research">300</div>
+                    <div class="resource-label">Research</div>
+                </div>
+                <div class="resource-item">
+                    <div class="resource-icon">🛡️</div>
+                    <div class="resource-value" id="defense">200</div>
+                    <div class="resource-label">Defense</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Minimap -->
+        <div class="minimap">
+            <div class="minimap-title">Global Overview</div>
+            <canvas class="minimap-canvas" id="minimapCanvas" width="180" height="110"></canvas>
+        </div>
+
+        <!-- Alert Banner -->
+        <div id="alertBanner" class="alert-banner hidden">
+            <div class="alert-title">🚨 GLOBAL CRISIS DETECTED</div>
+            <div class="alert-text">Critical systems are failing worldwide</div>
+            <button class="alert-btn" onclick="dismissAlert()">ACKNOWLEDGE</button>
+        </div>
+    </div>
+
+    <!-- Audio Elements -->
+    <audio id="audioAmbient" loop>
+        <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvWYQEz2N0O/eUoUAAEYqLPDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvWYXETWDx/XQZBcHIG2oVDmL3dZOF0dOmcXt0mcSAB2RUYvZFr" type="audio/wav">
+    </audio>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.1/three.min.js"></script>
+    <script>
+        // Global Game State and Systems
+        class GlobalCommandCenter {
+            constructor() {
+                this.scene = null;
+                this.camera = null;
+                this.renderer = null;
+                this.earth = null;
+                this.atmosphere = null;
+                
+                // Game State
+                this.gameMode = 'observe';
+                this.paused = false;
+                this.speed = 1;
+                this.time = 0;
+                
+                // Hexagonal Grid System
+                this.hexGrid = new HexagonalGrid();
+                this.regions = new Map();
+                this.entities = new Map();
+                this.selectedEntity = null;
+                this.hoveredEntity = null;
+                
+                // Global Metrics
+                this.globalStats = {
+                    population: 8000000000,
+                    health: 75,
+                    environment: 60,
+                    suffering: 25,
+                    psychology: 70,
+                    technology: 80
+                };
+                
+                this.previousStats = { ...this.globalStats };
+                
+                // Resources
+                this.resources = {
+                    credits: 1000,
+                    energy: 500,
+                    research: 300,
+                    defense: 200
+                };
+                
+                // Systems
+                this.intel = new IntelligenceSystem();
+                this.audio = new AudioSystem();
+                this.effects = new EffectsSystem();
+                
+                // Input Handling
+                this.mouse = new THREE.Vector2();
+                this.raycaster = new THREE.Raycaster();
+                this.isDragging = false;
+                this.dragStart = new THREE.Vector2();
+                
+                this.init();
+            }
+            
+            async init() {
+                await this.initRenderer();
+                await this.initScene();
+                await this.initHexGrid();
+                await this.initEntities();
+                await this.initAudio();
+                
+                this.setupEventListeners();
+                this.startGameLoop();
+                
+                // Hide loading screen
+                document.getElementById('loadingScreen').style.display = 'none';
+                
+                this.intel.addMessage('SYSTEM', '🌍 Global Command Center operational');
+                this.intel.addMessage('STATUS', '🛡️ All defense systems online');
+                this.intel.addMessage('INTEL', '📡 Satellite networks synchronized');
+            }
+            
+            async initRenderer() {
+                const canvas = document.getElementById('gameCanvas');
+                this.renderer = new THREE.WebGLRenderer({ 
+                    canvas, 
+                    antialias: true, 
+                    alpha: true,
+                    powerPreference: "high-performance"
+                });
+                
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+                this.renderer.shadowMap.enabled = true;
+                this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+                this.renderer.toneMappingExposure = 1.0;
+            }
+            
+            async initScene() {
+                this.scene = new THREE.Scene();
+                this.scene.fog = new THREE.Fog(0x000011, 50, 200);
+                
+                // Camera
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.camera.position.set(0, 0, 20);
+                
+                // Lighting
+                const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+                this.scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
+                directionalLight.position.set(10, 10, 5);
+                directionalLight.castShadow = true;
+                directionalLight.shadow.mapSize.width = 2048;
+                directionalLight.shadow.mapSize.height = 2048;
+                this.scene.add(directionalLight);
+                
+                // Create Earth
+                await this.createEarth();
+                await this.createAtmosphere();
+                await this.createStarfield();
+            }
+            
+            async createEarth() {
+                const geometry = new THREE.SphereGeometry(5, 128, 128);
+                
+                // Enhanced procedural Earth texture
+                const canvas = document.createElement('canvas');
+                canvas.width = 2048;
+                canvas.height = 1024;
+                const ctx = canvas.getContext('2d');
+                
+                // Ocean gradient
+                const oceanGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                oceanGradient.addColorStop(0, '#1e3a8a');
+                oceanGradient.addColorStop(0.5, '#1e40af');
+                oceanGradient.addColorStop(1, '#1d4ed8');
+                ctx.fillStyle = oceanGradient;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                // Continents with realistic shapes
+                ctx.fillStyle = '#22c55e';
+                this.drawRealisticContinents(ctx);
+                
+                // Add terrain variation
+                this.addTerrainNoise(ctx);
+                
+                const earthTexture = new THREE.CanvasTexture(canvas);
+                earthTexture.wrapS = THREE.RepeatWrapping;
+                earthTexture.wrapT = THREE.RepeatWrapping;
+                
+                // Normal map for surface detail
+                const normalTexture = this.createNormalMap();
+                
+                const earthMaterial = new THREE.MeshPhongMaterial({
+                    map: earthTexture,
+                    normalMap: normalTexture,
+                    shininess: 100,
+                    specular: 0x222222
+                });
+                
+                this.earth = new THREE.Mesh(geometry, earthMaterial);
+                this.earth.receiveShadow = true;
+                this.scene.add(this.earth);
+            }
+            
+            drawRealisticContinents(ctx) {
+                const continents = [
+                    // North America
+                    { x: 200, y: 300, points: [[0,0], [300,-50], [280,150], [200,200], [100,180], [50,100], [0,0]] },
+                    // South America  
+                    { x: 280, y: 500, points: [[0,0], [150,-30], [120,300], [80,350], [20,280], [-20,150], [0,0]] },
+                    // Europe
+                    { x: 900, y: 280, points: [[0,0], [200,-40], [180,120], [100,140], [50,100], [0,0]] },
+                    // Africa
+                    { x: 950, y: 400, points: [[0,0], [250,-80], [280,300], [200,450], [100,400], [50,200], [0,0]] },
+                    // Asia
+                    { x: 1100, y: 250, points: [[0,0], [600,-100], [580,250], [400,300], [200,200], [0,0]] },
+                    // Australia
+                    { x: 1500, y: 650, points: [[0,0], [300,-50], [280,150], [100,120], [0,0]] }
+                ];
+                
+                continents.forEach(continent => {
+                    ctx.save();
+                    ctx.translate(continent.x, continent.y);
+                    ctx.beginPath();
+                    ctx.moveTo(continent.points[0][0], continent.points[0][1]);
+                    
+                    for (let i = 1; i < continent.points.length; i++) {
+                        ctx.lineTo(continent.points[i][0], continent.points[i][1]);
+                    }
+                    
+                    ctx.closePath();
+                    ctx.fill();
+                    
+                    // Add mountain ranges
+                    ctx.fillStyle = '#16a34a';
+                    for (let i = 0; i < 10; i++) {
+                        const x = Math.random() * 200;
+                        const y = Math.random() * 150;
+                        ctx.beginPath();
+                        ctx.arc(x, y, Math.random() * 20 + 5, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    
+                    ctx.restore();
+                });
+            }
+            
+            addTerrainNoise(ctx) {
+                const imageData = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+                const data = imageData.data;
+                
+                for (let i = 0; i < data.length; i += 4) {
+                    const noise = (Math.random() - 0.5) * 30;
+                    data[i] = Math.max(0, Math.min(255, data[i] + noise));     // R
+                    data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + noise)); // G
+                    data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + noise)); // B
+                }
+                
+                ctx.putImageData(imageData, 0, 0);
+            }
+            
+            createNormalMap() {
+                const canvas = document.createElement('canvas');
+                canvas.width = 512;
+                canvas.height = 256;
+                const ctx = canvas.getContext('2d');
+                
+                // Create heightmap-based normal map
+                const gradient = ctx.createRadialGradient(256, 128, 0, 256, 128, 256);
+                gradient.addColorStop(0, '#8080ff');
+                gradient.addColorStop(0.5, '#6060ff');
+                gradient.addColorStop(1, '#4040ff');
+                
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                return new THREE.CanvasTexture(canvas);
+            }
+            
+            async createAtmosphere() {
+                const geometry = new THREE.SphereGeometry(5.3, 64, 64);
+                
+                const atmosphereMaterial = new THREE.ShaderMaterial({
+                    uniforms: {
+                        time: { value: 0 },
+                        intensity: { value: 1.0 }
+                    },
+                    vertexShader: `
+                        varying vec3 vNormal;
+                        varying vec3 vPosition;
+                        void main() {
+                            vNormal = normalize(normalMatrix * normal);
+                            vPosition = position;
+                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                        }
+                    `,
+                    fragmentShader: `
+                        uniform float time;
+                        uniform float intensity;
+                        varying vec3 vNormal;
+                        varying vec3 vPosition;
+                        
+                        void main() {
+                            float fresnel = pow(1.0 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 2.0);
+                            vec3 atmosphere = vec3(0.3, 0.6, 1.0) * fresnel;
+                            float pulse = sin(time * 0.5) * 0.1 + 0.9;
+                            gl_FragColor = vec4(atmosphere * intensity * pulse, fresnel * 0.6);
+                        }
+                    `,
+                    transparent: true,
+                    side: THREE.BackSide,
+                    blending: THREE.AdditiveBlending
+                });
+                
+                this.atmosphere = new THREE.Mesh(geometry, atmosphereMaterial);
+                this.scene.add(this.atmosphere);
+            }
+            
+            async createStarfield() {
+                const starGeometry = new THREE.BufferGeometry();
+                const starCount = 20000;
+                const positions = new Float32Array(starCount * 3);
+                const colors = new Float32Array(starCount * 3);
+                const sizes = new Float32Array(starCount);
+                
+                for (let i = 0; i < starCount; i++) {
+                    const radius = 500 + Math.random() * 1500;
+                    const theta = Math.random() * Math.PI * 2;
+                    const phi = Math.acos(2 * Math.random() - 1);
+                    
+                    positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
+                    positions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+                    positions[i * 3 + 2] = radius * Math.cos(phi);
+                    
+                    // Star colors based on temperature
+                    const starType = Math.random();
+                    if (starType < 0.1) {
+                        colors[i * 3] = 1; colors[i * 3 + 1] = 0.6; colors[i * 3 + 2] = 0.4; // Red giants
+                    } else if (starType < 0.3) {
+                        colors[i * 3] = 1; colors[i * 3 + 1] = 0.8; colors[i * 3 + 2] = 0.6; // Orange
+                    } else if (starType < 0.6) {
+                        colors[i * 3] = 1; colors[i * 3 + 1] = 1; colors[i * 3 + 2] = 1; // White
+                    } else {
+                        colors[i * 3] = 0.7; colors[i * 3 + 1] = 0.8; colors[i * 3 + 2] = 1; // Blue giants
+                    }
+                    
+                    sizes[i] = Math.random() * 3 + 1;
+                }
+                
+                starGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                starGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                starGeometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+                
+                const starMaterial = new THREE.ShaderMaterial({
+                    uniforms: {
+                        time: { value: 0 }
+                    },
+                    vertexShader: `
+                        attribute float size;
+                        attribute vec3 color;
+                        varying vec3 vColor;
+                        uniform float time;
+                        
+                        void main() {
+                            vColor = color;
+                            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                            float twinkle = sin(time * 2.0 + position.x * 0.01) * 0.3 + 0.7;
+                            gl_PointSize = size * twinkle * (300.0 / -mvPosition.z);
+                            gl_Position = projectionMatrix * mvPosition;
+                        }
+                    `,
+                    fragmentShader: `
+                        varying vec3 vColor;
+                        
+                        void main() {
+                            float distance = length(gl_PointCoord - vec2(0.5));
+                            if (distance > 0.5) discard;
+                            float alpha = 1.0 - distance * 2.0;
+                            gl_FragColor = vec4(vColor, alpha);
+                        }
+                    `,
+                    transparent: true,
+                    vertexColors: true,
+                    blending: THREE.AdditiveBlending
+                });
+                
+                const stars = new THREE.Points(starGeometry, starMaterial);
+                this.scene.add(stars);
+                this.starfield = stars;
+            }
+            
+            async initHexGrid() {
+                this.hexGrid.generateGrid();
+                this.hexGrid.populateRegions();
+                
+                // Create visual hex grid on Earth
+                this.createHexVisualization();
+            }
+            
+            createHexVisualization() {
+                const hexGroup = new THREE.Group();
+                
+                this.hexGrid.hexagons.forEach((hex, id) => {
+                    const hexMesh = this.createHexagonMesh(hex);
+                    hexMesh.userData = { hexId: id, hex: hex };
+                    hexGroup.add(hexMesh);
+                });
+                
+                this.scene.add(hexGroup);
+                this.hexGroup = hexGroup;
+            }
+            
+            createHexagonMesh(hex) {
+                const geometry = new THREE.RingGeometry(0.18, 0.2, 6);
+                const material = new THREE.MeshBasicMaterial({
+                    color: this.getHexColor(hex),
+                    transparent: true,
+                    opacity: 0.3,
+                    side: THREE.DoubleSide
+                });
+                
+                const mesh = new THREE.Mesh(geometry, material);
+                const pos = this.latLonToCartesian(hex.lat, hex.lon, 5.05);
+                mesh.position.copy(pos);
+                mesh.lookAt(0, 0, 0);
+                
+                return mesh;
+            }
+            
+            getHexColor(hex) {
+                const region = hex.region;
+                if (!region) return 0x444444;
+                
+                // Color based on development level
+                if (region.developmentLevel > 0.8) return 0x00ff00; // Green - developed
+                if (region.developmentLevel > 0.5) return 0xffff00; // Yellow - developing
+                return 0xff8800; // Orange - underdeveloped
+            }
+            
+            async initEntities() {
+                // Create satellites
+                await this.createSatellites();
+                
+                // Create strategic facilities
+                await this.createFacilities();
+                
+                // Create mobile entities (ships, aircraft, etc.)
+                await this.createMobileEntities();
+            }
+            
+            async createSatellites() {
+                const constellations = [
+                    { name: 'GPS', count: 24, altitude: 7, color: 0x00ff00, type: 'navigation' },
+                    { name: 'COMSAT', count: 12, altitude: 8.5, color: 0x0088ff, type: 'communication' },
+                    { name: 'SPYSAT', count: 8, altitude: 6.5, color: 0xff4400, type: 'surveillance' },
+                    { name: 'WEATHER', count: 6, altitude: 9, color: 0xffff00, type: 'meteorological' },
+                    { name: 'MILITARY', count: 4, altitude: 7.5, color: 0xff0088, type: 'defense' }
+                ];
+                
+                constellations.forEach(constellation => {
+                    for (let i = 0; i < constellation.count; i++) {
+                        const satellite = new SatelliteEntity(constellation, i);
+                        this.entities.set(satellite.id, satellite);
+                        this.scene.add(satellite.mesh);
+                    }
+                });
+            }
+            
+            async createFacilities() {
+                const facilities = [
+                    { name: 'NORAD', lat: 38.7441, lon: -104.8463, type: 'command' },
+                    { name: 'Pentagon', lat: 38.8719, lon: -77.0563, type: 'military' },
+                    { name: 'CERN', lat: 46.2044, lon: 6.1432, type: 'research' },
+                    { name: 'CDC Atlanta', lat: 33.7490, lon: -84.3880, type: 'medical' },
+                    { name: 'Kremlin', lat: 55.7520, lon: 37.6175, type: 'government' },
+                    { name: 'UN Headquarters', lat: 40.7489, lon: -73.9680, type: 'diplomatic' },
+                    { name: 'Silicon Valley', lat: 37.4419, lon: -122.1430, type: 'technology' },
+                    { name: 'Chernobyl', lat: 51.3890, lon: 30.0983, type: 'hazard' }
+                ];
+                
+                facilities.forEach(facilityData => {
+                    const facility = new FacilityEntity(facilityData);
+                    this.entities.set(facility.id, facility);
+                    this.scene.add(facility.mesh);
+                });
+            }
+            
+            async createMobileEntities() {
+                // Create some initial mobile entities (aircraft carriers, surveillance planes, etc.)
+                for (let i = 0; i < 10; i++) {
+                    const lat = (Math.random() - 0.5) * 180;
+                    const lon = (Math.random() - 0.5) * 360;
+                    const type = Math.random() < 0.5 ? 'naval' : 'aircraft';
+                    
+                    const entity = new MobileEntity({ lat, lon, type });
+                    this.entities.set(entity.id, entity);
+                    this.scene.add(entity.mesh);
+                }
+            }
+            
+            async initAudio() {
+                await this.audio.init();
+                this.audio.playAmbient();
+            }
+            
+            setupEventListeners() {
+                // Mouse events
+                window.addEventListener('mousedown', this.onMouseDown.bind(this));
+                window.addEventListener('mousemove', this.onMouseMove.bind(this));
+                window.addEventListener('mouseup', this.onMouseUp.bind(this));
+                window.addEventListener('wheel', this.onWheel.bind(this));
+                
+                // Keyboard events
+                window.addEventListener('keydown', this.onKeyDown.bind(this));
+                
+                // Window resize
+                window.addEventListener('resize', this.onResize.bind(this));
+            }
+            
+            onMouseDown(event) {
+                this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                
+                this.dragStart.copy(this.mouse);
+                this.isDragging = true;
+                
+                // Check for entity selection
+                this.checkEntitySelection();
+            }
+            
+            onMouseMove(event) {
+                this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                
+                if (this.isDragging) {
+                    const deltaX = this.mouse.x - this.dragStart.x;
+                    const deltaY = this.mouse.y - this.dragStart.y;
+                    
+                    // Rotate Earth
+                    this.earth.rotation.y += deltaX * 2;
+                    this.earth.rotation.x += deltaY * 2;
+                    this.atmosphere.rotation.y += deltaX * 2;
+                    this.atmosphere.rotation.x += deltaY * 2;
+                    
+                    // Rotate hex grid
+                    if (this.hexGroup) {
+                        this.hexGroup.rotation.y += deltaX * 2;
+                        this.hexGroup.rotation.x += deltaY * 2;
+                    }
+                    
+                    this.dragStart.copy(this.mouse);
+                } else {
+                    // Check for hover effects
+                    this.checkEntityHover();
+                }
+            }
+            
+            onMouseUp(event) {
+                this.isDragging = false;
+            }
+            
+            onWheel(event) {
+                const zoomSpeed = 0.1;
+                const zoomDelta = event.deltaY * zoomSpeed;
+                
+                this.camera.position.z += zoomDelta;
+                this.camera.position.z = Math.max(8, Math.min(50, this.camera.position.z));
+            }
+            
+            onKeyDown(event) {
+                switch (event.code) {
+                    case 'Space':
+                        event.preventDefault();
+                        this.togglePause();
+                        break;
+                    case 'KeyR':
+                        this.resetSimulation();
+                        break;
+                    case 'Escape':
+                        this.clearSelection();
+                        break;
+                }
+            }
+            
+            onResize() {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+            
+            checkEntitySelection() {
+                this.raycaster.setFromCamera(this.mouse, this.camera);
+                
+                const intersectable = [];
+                this.entities.forEach(entity => {
+                    if (entity.mesh && entity.selectable) {
+                        intersectable.push(entity.mesh);
+                    }
+                });
+                
+                // Add hex meshes
+                if (this.hexGroup) {
+                    intersectable.push(...this.hexGroup.children);
+                }
+                
+                const intersects = this.raycaster.intersectObjects(intersectable);
+                
+                if (intersects.length > 0) {
+                    const selected = intersects[0].object;
+                    
+                    if (selected.userData.hexId) {
+                        // Hex selection
+                        this.selectHex(selected.userData.hex);
+                    } else {
+                        // Entity selection
+                        const entity = this.findEntityByMesh(selected);
+                        if (entity) {
+                            this.selectEntity(entity);
+                        }
+                    }
+                    
+                    this.audio.playSound('select');
+                }
+            }
+            
+            checkEntityHover() {
+                this.raycaster.setFromCamera(this.mouse, this.camera);
+                
+                const intersectable = [];
+                this.entities.forEach(entity => {
+                    if (entity.mesh && entity.selectable) {
+                        intersectable.push(entity.mesh);
+                    }
+                });
+                
+                const intersects = this.raycaster.intersectObjects(intersectable);
+                
+                if (intersects.length > 0) {
+                    const entity = this.findEntityByMesh(intersects[0].object);
+                    if (entity && entity !== this.hoveredEntity) {
+                        this.setHoveredEntity(entity);
+                    }
+                } else if (this.hoveredEntity) {
+                    this.setHoveredEntity(null);
+                }
+            }
+            
+            findEntityByMesh(mesh) {
+                for (let [id, entity] of this.entities) {
+                    if (entity.mesh === mesh) {
+                        return entity;
+                    }
+                }
+                return null;
+            }
+            
+            selectEntity(entity) {
+                if (this.selectedEntity) {
+                    this.selectedEntity.setSelected(false);
+                }
+                
+                this.selectedEntity = entity;
+                entity.setSelected(true);
+                
+                this.updateSelectionUI();
+                this.showEntityControls();
+            }
+            
+            selectHex(hex) {
+                this.selectedEntity = null;
+                this.updateSelectionUI();
+                this.showHexInfo(hex);
+            }
+            
+            setHoveredEntity(entity) {
+                if (this.hoveredEntity) {
+                    this.hoveredEntity.setHovered(false);
+                }
+                
+                this.hoveredEntity = entity;
+                if (entity) {
+                    entity.setHovered(true);
+                }
+            }
+            
+            clearSelection() {
+                if (this.selectedEntity) {
+                    this.selectedEntity.setSelected(false);
+                    this.selectedEntity = null;
+                }
+                
+                this.hideSelectionUI();
+                this.hideEntityControls();
+            }
+            
+            updateSelectionUI() {
+                const selectionInfo = document.getElementById('selectionInfo');
+                const selectionTitle = document.getElementById('selectionTitle');
+                const selectionDetails = document.getElementById('selectionDetails');
+                
+                if (this.selectedEntity) {
+                    selectionInfo.classList.remove('hidden');
+                    selectionTitle.textContent = this.selectedEntity.getDisplayName();
+                    selectionDetails.innerHTML = this.selectedEntity.getDetailsHTML();
+                } else {
+                    selectionInfo.classList.add('hidden');
+                }
+            }
+            
+            showEntityControls() {
+                const controls = document.getElementById('entityControls');
+                if (this.selectedEntity && this.selectedEntity.hasActions()) {
+                    controls.classList.remove('hidden');
+                } else {
+                    controls.classList.add('hidden');
+                }
+            }
+            
+            hideEntityControls() {
+                document.getElementById('entityControls').classList.add('hidden');
+            }
+            
+            hideSelectionUI() {
+                document.getElementById('selectionInfo').classList.add('hidden');
+            }
+            
+            showHexInfo(hex) {
+                const selectionInfo = document.getElementById('selectionInfo');
+                const selectionTitle = document.getElementById('selectionTitle');
+                const selectionDetails = document.getElementById('selectionDetails');
+                
+                selectionInfo.classList.remove('hidden');
+                selectionTitle.textContent = `Region ${hex.id}`;
+                
+                const region = hex.region;
+                if (region) {
+                    selectionDetails.innerHTML = `
+                        <div class="detail-item">Population: <span class="detail-value">${(region.population / 1000000).toFixed(1)}M</span></div>
+                        <div class="detail-item">Health: <span class="detail-value">${region.health.toFixed(1)}%</span></div>
+                        <div class="detail-item">Environment: <span class="detail-value">${region.environment.toFixed(1)}%</span></div>
+                        <div class="detail-item">Suffering: <span class="detail-value">${region.suffering.toFixed(1)}%</span></div>
+                        <div class="detail-item">Development: <span class="detail-value">${(region.developmentLevel * 100).toFixed(1)}%</span></div>
+                        <div class="detail-item">Pollution: <span class="detail-value">${region.pollution.toFixed(1)}%</span></div>
+                    `;
+                } else {
+                    selectionDetails.innerHTML = '<div class="detail-item">Ocean region</div>';
+                }
+                
+                this.hideEntityControls();
+            }
+            
+            startGameLoop() {
+                const animate = () => {
+                    requestAnimationFrame(animate);
+                    this.update();
+                    this.render();
+                };
+                animate();
+            }
+            
+            update() {
+                if (!this.paused) {
+                    this.time += 0.016 * this.speed;
+                    
+                    // Update atmosphere shader
+                    if (this.atmosphere.material.uniforms) {
+                        this.atmosphere.material.uniforms.time.value = this.time;
+                    }
+                    
+                    // Update starfield
+                    if (this.starfield && this.starfield.material.uniforms) {
+                        this.starfield.material.uniforms.time.value = this.time;
+                    }
+                    
+                    // Update entities
+                    this.entities.forEach(entity => entity.update(this.time, this.speed));
+                    
+                    // Update hex grid simulation
+                    this.hexGrid.update(this.time, this.speed);
+                    
+                    // Update global statistics
+                    this.updateGlobalStats();
+                    
+                    // Generate random events
+                    if (Math.random() < 0.001 * this.speed) {
+                        this.generateRandomEvent();
+                    }
+                    
+                    // Update resource generation
+                    this.updateResources();
+                    
+                    // Check for global crises
+                    this.checkGlobalCrisis();
+                }
+                
+                // Update UI
+                this.updateUI();
+            }
+            
+            updateGlobalStats() {
+                // Calculate global stats from hex regions
+                let totalPop = 0;
+                let avgHealth = 0;
+                let avgEnvironment = 0;
+                let avgSuffering = 0;
+                let avgPsychology = 0;
+                let avgTechnology = 0;
+                let regionCount = 0;
+                
+                this.hexGrid.hexagons.forEach(hex => {
+                    if (hex.region) {
+                        totalPop += hex.region.population;
+                        avgHealth += hex.region.health;
+                        avgEnvironment += hex.region.environment;
+                        avgSuffering += hex.region.suffering;
+                        avgPsychology += hex.region.psychology;
+                        avgTechnology += hex.region.technology;
+                        regionCount++;
+                    }
+                });
+                
+                if (regionCount > 0) {
+                    this.globalStats.population = totalPop;
+                    this.globalStats.health = avgHealth / regionCount;
+                    this.globalStats.environment = avgEnvironment / regionCount;
+                    this.globalStats.suffering = avgSuffering / regionCount;
+                    this.globalStats.psychology = avgPsychology / regionCount;
+                    this.globalStats.technology = avgTechnology / regionCount;
+                }
+            }
+            
+            updateResources() {
+                this.resources.credits += 3 * this.speed;
+                this.resources.energy += 2 * this.speed;
+                this.resources.research += 1 * this.speed;
+                this.resources.defense += 0.5 * this.speed;
+            }
+            
+            generateRandomEvent() {
+                const events = [
+                    { text: '🌊 Tsunami warning issued for Pacific regions', effect: { environment: -2, suffering: +5 } },
+                    { text: '🔬 Breakthrough in renewable energy technology', effect: { technology: +3, environment: +2 } },
+                    { text: '☄️ Asteroid debris field detected near Earth', effect: { psychology: -3 } },
+                    { text: '🌿 Major reforestation project shows success', effect: { environment: +4 } },
+                    { text: '💻 Global internet disruption lasted 2 hours', effect: { technology: -2, psychology: -3 } },
+                    { text: '🦠 New antibiotic resistant strain contained', effect: { health: -1, suffering: +2 } },
+                    { text: '⚡ Solar storm affects satellite operations', effect: { technology: -3 } },
+                    { text: '🕊️ Peace treaty signed between warring nations', effect: { psychology: +5, suffering: -3 } }
+                ];
+                
+                const event = events[Math.floor(Math.random() * events.length)];
+                this.intel.addMessage('ALERT', event.text);
+                
+                // Apply global effects
+                Object.keys(event.effect).forEach(key => {
+                    if (this.globalStats[key] !== undefined) {
+                        this.globalStats[key] += event.effect[key];
+                        this.globalStats[key] = Math.max(0, Math.min(100, this.globalStats[key]));
+                    }
+                });
+                
+                this.audio.playSound('event');
+            }
+            
+            checkGlobalCrisis() {
+                if (this.globalStats.suffering > 80 || this.globalStats.health < 20 || this.globalStats.environment < 15) {
+                    this.showCrisisAlert();
+                }
+            }
+            
+            showCrisisAlert() {
+                const alert = document.getElementById('alertBanner');
+                alert.classList.remove('hidden');
+                this.audio.playSound('alarm');
+            }
+            
+            dismissAlert() {
+                document.getElementById('alertBanner').classList.add('hidden');
+            }
+            
+            updateUI() {
+                // Update global stats display
+                this.updateStatsDisplay();
+                
+                // Update resource display
+                this.updateResourceDisplay();
+                
+                // Update minimap
+                this.updateMinimap();
+                
+                // Update intelligence feed
+                this.intel.updateUI();
+            }
+            
+            updateStatsDisplay() {
+                const stats = ['population', 'health', 'environment', 'suffering', 'psychology', 'technology'];
+                
+                stats.forEach(stat => {
+                    const element = document.getElementById(`global${stat.charAt(0).toUpperCase() + stat.slice(1)}`);
+                    const changeElement = document.getElementById(`${stat}Change`);
+                    
+                    if (element) {
+                        if (stat === 'population') {
+                            element.textContent = (this.globalStats[stat] / 1000000000).toFixed(1) + 'B';
+                        } else {
+                            element.textContent = this.globalStats[stat].toFixed(1) + '%';
+                        }
+                    }
+                    
+                    if (changeElement) {
+                        const change = this.globalStats[stat] - this.previousStats[stat];
+                        if (Math.abs(change) > 0.1) {
+                            changeElement.textContent = (change > 0 ? '+' : '') + change.toFixed(1);
+                            changeElement.className = 'stat-change ' + (change > 0 ? 'positive' : 'negative');
+                        } else {
+                            changeElement.textContent = '';
+                        }
+                    }
+                });
+                
+                this.previousStats = { ...this.globalStats };
+            }
+            
+            updateResourceDisplay() {
+                Object.keys(this.resources).forEach(resource => {
+                    const element = document.getElementById(resource);
+                    if (element) {
+                        element.textContent = Math.floor(this.resources[resource]);
+                    }
+                });
+            }
+            
+            updateMinimap() {
+                const canvas = document.getElementById('minimapCanvas');
+                const ctx = canvas.getContext('2d');
+                
+                ctx.fillStyle = '#001122';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                // Draw simplified world map
+                ctx.fillStyle = '#004488';
+                this.hexGrid.hexagons.forEach(hex => {
+                    if (hex.region) {
+                        const x = ((hex.lon + 180) / 360) * canvas.width;
+                        const y = ((90 - hex.lat) / 180) * canvas.height;
+                        
+                        // Color based on condition
+                        if (hex.region.suffering > 70) {
+                            ctx.fillStyle = '#ff4444';
+                        } else if (hex.region.health < 30) {
+                            ctx.fillStyle = '#ff8844';
+                        } else if (hex.region.environment < 30) {
+                            ctx.fillStyle = '#ffff44';
+                        } else {
+                            ctx.fillStyle = '#44ff44';
+                        }
+                        
+                        ctx.fillRect(x - 1, y - 1, 2, 2);
+                    }
+                });
+            }
+            
+            latLonToCartesian(lat, lon, radius) {
+                const phi = (90 - lat) * (Math.PI / 180);
+                const theta = (lon + 180) * (Math.PI / 180);
+                
+                return new THREE.Vector3(
+                    -radius * Math.sin(phi) * Math.cos(theta),
+                    radius * Math.cos(phi),
+                    radius * Math.sin(phi) * Math.sin(theta)
+                );
+            }
+            
+            render() {
+                this.renderer.render(this.scene, this.camera);
+            }
+            
+            // Game Control Methods
+            setGameMode(mode) {
+                this.gameMode = mode;
+                
+                // Update UI
+                document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('active'));
+                document.getElementById(`mode${mode.charAt(0).toUpperCase() + mode.slice(1)}`).classList.add('active');
+                
+                this.intel.addMessage('COMMAND', `🎮 Mode changed to: ${mode.toUpperCase()}`);
+            }
+            
+            togglePause() {
+                this.paused = !this.paused;
+                document.getElementById('pauseBtn').textContent = this.paused ? '▶️ PLAY' : '⏸️ PAUSE';
+                
+                if (this.paused) {
+                    this.audio.pauseAmbient();
+                    this.intel.addMessage('SYSTEM', '⏸️ Simulation paused');
+                } else {
+                    this.audio.resumeAmbient();
+                    this.intel.addMessage('SYSTEM', '▶️ Simulation resumed');
+                }
+            }
+            
+            changeSpeed() {
+                const speeds = [0.5, 1, 2, 4];
+                const currentIndex = speeds.indexOf(this.speed);
+                this.speed = speeds[(currentIndex + 1) % speeds.length];
+                
+                document.getElementById('speedBtn').textContent = `⚡ ${this.speed}x`;
+                this.intel.addMessage('SYSTEM', `⚡ Speed: ${this.speed}x`);
+            }
+            
+            resetSimulation() {
+                // Reset all systems
+                this.globalStats = {
+                    population: 8000000000,
+                    health: 75,
+                    environment: 60,
+                    suffering: 25,
+                    psychology: 70,
+                    technology: 80
+                };
+                
+                this.resources = {
+                    credits: 1000,
+                    energy: 500,
+                    research: 300,
+                    defense: 200
+                };
+                
+                this.speed = 1;
+                this.paused = false;
+                this.time = 0;
+                
+                // Reset entities
+                this.entities.forEach(entity => entity.reset());
+                
+                // Reset hex grid
+                this.hexGrid.reset();
+                
+                // Clear selection
+                this.clearSelection();
+                
+                // Reset UI
+                document.getElementById('speedBtn').textContent = '⚡ 1x';
+                document.getElementById('pauseBtn').textContent = '⏸️ PAUSE';
+                document.getElementById('modeObserve').classList.add('active');
+                document.getElementById('modeDefend').classList.remove('active');
+                document.getElementById('modeDestroy').classList.remove('active');
+                
+                this.intel.clear();
+                this.intel.addMessage('SYSTEM', '🔄 Global Command Center reset');
+                this.intel.addMessage('STATUS', '🌍 All systems nominal');
+            }
+            
+            deployAction(actionType) {
+                if (this.selectedEntity) {
+                    this.selectedEntity.executeAction(actionType, this);
+                    this.audio.playSound('action');
+                }
+            }
+        }
+        
+        // Hexagonal Grid System
+        class HexagonalGrid {
+            constructor() {
+                this.hexagons = new Map();
+                this.gridRadius = 20; // Number of hex rings around the globe
+            }
+            
+            generateGrid() {
+                // Generate hexagonal grid covering the globe
+                const hexRadius = 180 / this.gridRadius; // Degrees per hex
+                
+                for (let q = -this.gridRadius; q <= this.gridRadius; q++) {
+                    for (let r = -this.gridRadius; r <= this.gridRadius; r++) {
+                        if (Math.abs(q + r) <= this.gridRadius) {
+                            const hex = new Hexagon(q, r, hexRadius);
+                            this.hexagons.set(hex.id, hex);
+                        }
+                    }
+                }
+            }
+            
+            populateRegions() {
+                this.hexagons.forEach(hex => {
+                    // Determine if this hex is land or water
+                    if (this.isLand(hex.lat, hex.lon)) {
+                        hex.region = new Region(hex);
+                    }
+                });
+            }
+            
+            isLand(lat, lon) {
+                // Simplified land detection - in reality would use real geographic data
+                const landMasks = [
+                    { latMin: 25, latMax: 70, lonMin: -170, lonMax: -50 }, // North America
+                    { latMin: -60, latMax: 15, lonMin: -90, lonMax: -30 }, // South America
+                    { latMin: 35, latMax: 75, lonMin: -15, lonMax: 50 }, // Europe
+                    { latMin: -40, latMax: 40, lonMin: 10, lonMax: 55 }, // Africa
+                    { latMin: 5, latMax: 75, lonMin: 50, lonMax: 180 }, // Asia
+                    { latMin: -50, latMax: -10, lonMin: 110, lonMax: 155 } // Australia
+                ];
+                
+                return landMasks.some(mask => 
+                    lat >= mask.latMin && lat <= mask.latMax &&
+                    lon >= mask.lonMin && lon <= mask.lonMax
+                );
+            }
+            
+            update(time, speed) {
+                this.hexagons.forEach(hex => {
+                    if (hex.region) {
+                        hex.region.update(time, speed);
+                    }
+                });
+            }
+            
+            reset() {
+                this.hexagons.forEach(hex => {
+                    if (hex.region) {
+                        hex.region.reset();
+                    }
+                });
+            }
+            
+            getHexAt(lat, lon) {
+                // Find closest hex to given coordinates
+                let closest = null;
+                let minDistance = Infinity;
+                
+                this.hexagons.forEach(hex => {
+                    const distance = Math.sqrt(
+                        Math.pow(hex.lat - lat, 2) + 
+                        Math.pow(hex.lon - lon, 2)
+                    );
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        closest = hex;
+                    }
+                });
+                
+                return closest;
+            }
+        }
+        
+        // Hexagon class
+        class Hexagon {
+            constructor(q, r, radius) {
+                this.q = q;
+                this.r = r;
+                this.s = -q - r;
+                this.radius = radius;
+                this.id = `hex_${q}_${r}`;
+                
+                // Convert hex coordinates to lat/lon
+                this.lat = this.hexToLat(q, r, radius);
+                this.lon = this.hexToLon(q, r, radius);
+                
+                this.region = null;
+            }
+            
+            hexToLat(q, r, radius) {
+                // Convert hex coordinates to latitude
+                const y = r * radius * 1.5;
+                return Math.max(-85, Math.min(85, y)); // Clamp to valid lat range
+            }
+            
+            hexToLon(q, r, radius) {
+                // Convert hex coordinates to longitude
+                const x = radius * (Math.sqrt(3) * q + Math.sqrt(3) / 2 * r);
+                return ((x + 180) % 360) - 180; // Wrap to valid lon range
+            }
+        }
+        
+        // Region class representing a land area
+        class Region {
+            constructor(hex) {
+                this.hex = hex;
+                this.id = `region_${hex.id}`;
+                
+                // Regional properties
+                this.population = this.generateInitialPopulation();
+                this.health = 60 + Math.random() * 30;
+                this.environment = 40 + Math.random() * 40;
+                this.suffering = 10 + Math.random() * 30;
+                this.psychology = 50 + Math.random() * 40;
+                this.technology = 30 + Math.random() * 50;
+                this.pollution = Math.random() * 30;
+                this.developmentLevel = Math.random();
+                
+                // Economic and social factors
+                this.economy = 0.3 + Math.random() * 0.7;
+                this.governance = 0.2 + Math.random() * 0.8;
+                this.culture = Math.random();
+                this.education = this.developmentLevel * 0.8 + Math.random() * 0.2;
+                
+                // Natural resources
+                this.resources = {
+                    oil: Math.random(),
+                    minerals: Math.random(),
+                    water: Math.random(),
+                    food: Math.random()
+                };
+                
+                // Climate data
+                this.climate = {
+                    temperature: this.getBaseTemperature(),
+                    humidity: Math.random(),
+                    rainfall: Math.random()
+                };
+                
+                this.initialState = this.getState();
+            }
+            
+            generateInitialPopulation() {
+                // Generate realistic population distribution
+                const basePop = Math.random() * 50000000; // 0-50M base
+                const urbanBonus = this.isUrbanArea() ? Math.random() * 100000000 : 0; // 0-100M for urban areas
+                return Math.floor(basePop + urbanBonus);
+            }
+            
+            isUrbanArea() {
+                // Simplified urban area detection
+                const urbanCenters = [
+                    { lat: 40.7128, lon: -74.0060 }, // New York
+                    { lat: 34.0522, lon: -118.2437 }, // Los Angeles
+                    { lat: 51.5074, lon: -0.1278 }, // London
+                    { lat: 48.8566, lon: 2.3522 }, // Paris
+                    { lat: 35.6762, lon: 139.6503 }, // Tokyo
+                    { lat: 39.9042, lon: 116.4074 }, // Beijing
+                    { lat: 19.0760, lon: 72.8777 }, // Mumbai
+                    { lat: -23.5505, lon: -46.6333 } // São Paulo
+                ];
+                
+                const threshold = 5; // degrees
+                return urbanCenters.some(center => 
+                    Math.abs(this.hex.lat - center.lat) < threshold &&
+                    Math.abs(this.hex.lon - center.lon) < threshold
+                );
+            }
+            
+            getBaseTemperature() {
+                // Temperature based on latitude
+                const latAbs = Math.abs(this.hex.lat);
+                if (latAbs < 23.5) return 25 + Math.random() * 10; // Tropical
+                if (latAbs < 35) return 15 + Math.random() * 15; // Subtropical
+                if (latAbs < 60) return 5 + Math.random() * 20; // Temperate
+                return -10 + Math.random() * 20; // Polar
+            }
+            
+            update(time, speed) {
+                // Gradual changes over time
+                this.applyNaturalChanges(speed);
+                this.applyClimateEffects(speed);
+                this.applyNeighborInfluences(speed);
+                this.applyRandomEvents(speed);
+            }
+            
+            applyNaturalChanges(speed) {
+                // Population growth
+                const growthRate = (this.health / 100) * (this.environment / 100) * 0.001;
+                this.population += this.population * growthRate * speed;
+                
+                // Environmental degradation
+                const pollutionIncrease = (this.population / 1000000) * 0.01 * speed;
+                this.pollution += pollutionIncrease;
+                this.environment -= pollutionIncrease * 0.5;
+                
+                // Technology advancement
+                this.technology += this.education * 0.01 * speed;
+                
+                // Health changes based on environment and pollution
+                const healthChange = (this.environment - this.pollution) * 0.01 * speed;
+                this.health += healthChange;
+                
+                // Psychology affected by health, environment, and governance
+                const psychChange = (this.health + this.environment + this.governance * 50 - this.suffering) * 0.005 * speed;
+                this.psychology += psychChange;
+                
+                // Clamp all values
+                this.clampValues();
+            }
+            
+            applyClimateEffects(speed) {
+                // Climate change effects
+                if (this.climate.temperature > 30) {
+                    this.health -= 0.1 * speed;
+                    this.environment -= 0.2 * speed;
+                }
+                
+                if (this.climate.rainfall < 0.3) {
+                    this.resources.food -= 0.1 * speed;
+                    this.resources.water -= 0.15 * speed;
+                }
+            }
+            
+            applyNeighborInfluences(speed) {
+                // Simplified neighbor influence - in full implementation would check actual neighbors
+                const neighborEffect = Math.random() * 0.5 - 0.25; // -0.25 to +0.25
+                this.psychology += neighborEffect * speed;
+                this.technology += neighborEffect * 0.5 * speed;
+            }
+            
+            applyRandomEvents(speed) {
+                if (Math.random() < 0.0001 * speed) {
+                    this.generateLocalEvent();
+                }
+            }
+            
+            generateLocalEvent() {
+                const events = [
+                    { name: 'Local disease outbreak', effects: { health: -10, suffering: +5 } },
+                    { name: 'Technology startup success', effects: { technology: +5, economy: +0.1 } },
+                    { name: 'Environmental cleanup', effects: { environment: +8, pollution: -5 } },
+                    { name: 'Political unrest', effects: { psychology: -8, governance: -0.1 } },
+                    { name: 'Educational reform', effects: { education: +0.1, technology: +3 } },
+                    { name: 'Natural disaster', effects: { environment: -5, health: -3, suffering: +8 } }
+                ];
+                
+                const event = events[Math.floor(Math.random() * events.length)];
+                this.applyEffects(event.effects);
+                
+                // Report to global intelligence
+                if (window.game && window.game.intel) {
+                    window.game.intel.addMessage('LOCAL', `${event.name} in region ${this.id}`);
+                }
+            }
+            
+            applyEffects(effects) {
+                Object.keys(effects).forEach(key => {
+                    if (this[key] !== undefined) {
+                        this[key] += effects[key];
+                    }
+                });
+                this.clampValues();
+            }
+            
+            clampValues() {
+                // Clamp percentage values
+                const percentageProps = ['health', 'environment', 'suffering', 'psychology', 'technology', 'pollution'];
+                percentageProps.forEach(prop => {
+                    this[prop] = Math.max(0, Math.min(100, this[prop]));
+                });
+                
+                // Clamp ratio values
+                const ratioProps = ['economy', 'governance', 'education'];
+                ratioProps.forEach(prop => {
+                    this[prop] = Math.max(0, Math.min(1, this[prop]));
+                });
+                
+                // Clamp resources
+                Object.keys(this.resources).forEach(key => {
+                    this.resources[key] = Math.max(0, Math.min(1, this.resources[key]));
+                });
+                
+                // Population can't go negative
+                this.population = Math.max(0, this.population);
+            }
+            
+            getState() {
+                return {
+                    population: this.population,
+                    health: this.health,
+                    environment: this.environment,
+                    suffering: this.suffering,
+                    psychology: this.psychology,
+                    technology: this.technology,
+                    pollution: this.pollution,
+                    economy: this.economy,
+                    governance: this.governance,
+                    education: this.education,
+                    resources: { ...this.resources },
+                    climate: { ...this.climate }
+                };
+            }
+            
+            reset() {
+                const state = this.initialState;
+                Object.keys(state).forEach(key => {
+                    if (typeof state[key] === 'object') {
+                        this[key] = { ...state[key] };
+                    } else {
+                        this[key] = state[key];
+                    }
+                });
+            }
+        }
+        
+        // Entity base class
+        class Entity {
+            constructor(type, data = {}) {
+                this.id = `entity_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                this.type = type;
+                this.data = data;
+                this.mesh = null;
+                this.selectable = true;
+                this.selected = false;
+                this.hovered = false;
+                this.active = true;
+            }
+            
+            setSelected(selected) {
+                this.selected = selected;
+                this.updateVisuals();
+            }
+            
+            setHovered(hovered) {
+                this.hovered = hovered;
+                this.updateVisuals();
+            }
+            
+            updateVisuals() {
+                if (!this.mesh) return;
+                
+                if (this.selected) {
+                    this.mesh.material.emissive.setHex(0x444444);
+                } else if (this.hovered) {
+                    this.mesh.material.emissive.setHex(0x222222);
+                } else {
+                    this.mesh.material.emissive.setHex(0x000000);
+                }
+            }
+            
+            update(time, speed) {
+                // Override in subclasses
+            }
+            
+            getDisplayName() {
+                return this.data.name || this.type;
+            }
+            
+            getDetailsHTML() {
+                return '<div class="detail-item">No details available</div>';
+            }
+            
+            hasActions() {
+                return false;
+            }
+            
+            executeAction(actionType, game) {
+                // Override in subclasses
+            }
+            
+            reset() {
+                // Override in subclasses
+            }
+        }
+        
+        // Satellite Entity
+        class SatelliteEntity extends Entity {
+            constructor(constellation, index) {
+                super('satellite', { constellation: constellation.name, index });
+                
+                this.constellation = constellation;
+                this.orbit = {
+                    radius: constellation.altitude,
+                    angle: (index / constellation.count) * Math.PI * 2,
+                    speed: 0.01 + Math.random() * 0.01,
+                    inclination: (Math.random() - 0.5) * 0.5
+                };
+                
+                this.status = 'operational';
+                this.health = 100;
+                
+                this.createMesh();
+            }
+            
+            createMesh() {
+                const geometry = new THREE.BoxGeometry(0.1, 0.1, 0.2);
+                const material = new THREE.MeshPhongMaterial({
+                    color: this.constellation.color,
+                    emissive: this.constellation.color,
+                    emissiveIntensity: 0.3
+                });
+                
+                this.mesh = new THREE.Mesh(geometry, material);
+                this.updatePosition();
+            }
+            
+            update(time, speed) {
+                if (this.status === 'operational') {
+                    this.orbit.angle += this.orbit.speed * speed;
+                    this.updatePosition();
+                }
+            }
+            
+            updatePosition() {
+                const x = Math.cos(this.orbit.angle) * this.orbit.radius;
+                const z = Math.sin(this.orbit.angle) * this.orbit.radius;
+                const y = Math.sin(this.orbit.inclination + this.orbit.angle * 0.1) * 2;
+                
+                this.mesh.position.set(x, y, z);
+            }
+            
+            getDisplayName() {
+                return `${this.constellation.name} Satellite #${this.data.index + 1}`;
+            }
+            
+            getDetailsHTML() {
+                return `
+                    <div class="detail-item">Status: <span class="detail-value">${this.status}</span></div>
+                    <div class="detail-item">Health: <span class="detail-value">${this.health.toFixed(1)}%</span></div>
+                    <div class="detail-item">Altitude: <span class="detail-value">${this.orbit.radius.toFixed(1)} RE</span></div>
+                    <div class="detail-item">Type: <span class="detail-value">${this.constellation.type}</span></div>
+                `;
+            }
+            
+            hasActions() {
+                return true;
+            }
+            
+            executeAction(actionType, game) {
+                switch (actionType) {
+                    case 'hack_satellite':
+                        this.status = 'compromised';
+                        this.health -= 50;
+                        game.intel.addMessage('CYBER', `${this.getDisplayName()} compromised`);
+                        break;
+                    case 'destroy_satellite':
+                        this.status = 'destroyed';
+                        this.health = 0;
+                        this.mesh.visible = false;
+                        game.intel.addMessage('WARFARE', `${this.getDisplayName()} destroyed`);
+                        break;
+                    case 'repair_satellite':
+                        if (game.resources.credits >= 200) {
+                            game.resources.credits -= 200;
+                            this.status = 'operational';
+                            this.health = 100;
+                            this.mesh.visible = true;
+                            game.intel.addMessage('REPAIR', `${this.getDisplayName()} repaired`);
+                        }
+                        break;
+                }
+                this.updateVisuals();
+            }
+        }
+        
+        // Facility Entity
+        class FacilityEntity extends Entity {
+            constructor(facilityData) {
+                super('facility', facilityData);
+                
+                this.facilityType = facilityData.type;
+                this.security = 50 + Math.random() * 50;
+                this.operational = true;
+                
+                this.createMesh();
+            }
+            
+            createMesh() {
+                const geometry = new THREE.ConeGeometry(0.1, 0.4, 8);
+                const color = this.getFacilityColor();
+                const material = new THREE.MeshPhongMaterial({
+                    color: color,
+                    emissive: color,
+                    emissiveIntensity: 0.4
+                });
+                
+                this.mesh = new THREE.Mesh(geometry, material);
+                
+                const pos = this.latLonToCartesian(this.data.lat, this.data.lon, 5.3);
+                this.mesh.position.copy(pos);
+                this.mesh.lookAt(0, 0, 0);
+            }
+            
+            getFacilityColor() {
+                switch (this.facilityType) {
+                    case 'military': return 0xff0000;
+                    case 'command': return 0xff4400;
+                    case 'research': return 0x00ffff;
+                    case 'medical': return 0x00ff88;
+                    case 'government': return 0x8800ff;
+                    case 'diplomatic': return 0x0088ff;
+                    case 'technology': return 0x88ff00;
+                    case 'hazard': return 0xff8800;
+                    default: return 0x888888;
+                }
+            }
+            
+            latLonToCartesian(lat, lon, radius) {
+                const phi = (90 - lat) * (Math.PI / 180);
+                const theta = (lon + 180) * (Math.PI / 180);
+                
+                return new THREE.Vector3(
+                    -radius * Math.sin(phi) * Math.cos(theta),
+                    radius * Math.cos(phi),
+                    radius * Math.sin(phi) * Math.sin(theta)
+                );
+            }
+            
+            update(time, speed) {
+                // Pulse effect
+                const pulse = Math.sin(time * 2) * 0.2 + 0.8;
+                if (this.mesh.material.emissiveIntensity !== undefined) {
+                    this.mesh.material.emissiveIntensity = 0.4 * pulse;
+                }
+            }
+            
+            getDisplayName() {
+                return this.data.name;
+            }
+            
+            getDetailsHTML() {
+                return `
+                    <div class="detail-item">Type: <span class="detail-value">${this.facilityType}</span></div>
+                    <div class="detail-item">Security: <span class="detail-value">${this.security.toFixed(1)}%</span></div>
+                    <div class="detail-item">Status: <span class="detail-value">${this.operational ? 'Operational' : 'Offline'}</span></div>
+                    <div class="detail-item">Location: <span class="detail-value">${this.data.lat.toFixed(2)}, ${this.data.lon.toFixed(2)}</span></div>
+                `;
+            }
+            
+            hasActions() {
+                return true;
+            }
+            
+            executeAction(actionType, game) {
+                switch (actionType) {
+                    case 'infiltrate_facility':
+                        this.security -= 20;
+                        game.intel.addMessage('COVERT', `Infiltration attempt at ${this.data.name}`);
+                        break;
+                    case 'attack_facility':
+                        this.operational = false;
+                        this.security -= 50;
+                        game.intel.addMessage('WARFARE', `Attack on ${this.data.name}`);
+                        break;
+                    case 'secure_facility':
+                        if (game.resources.credits >= 300) {
+                            game.resources.credits -= 300;
+                            this.security += 30;
+                            game.intel.addMessage('DEFENSE', `${this.data.name} security enhanced`);
+                        }
+                        break;
+                }
+                this.security = Math.max(0, Math.min(100, this.security));
+            }
+        }
+        
+        // Mobile Entity (ships, aircraft, etc.)
+        class MobileEntity extends Entity {
+            constructor(data) {
+                super('mobile', data);
+                
+                this.vehicleType = data.type;
+                this.speed = 0.1 + Math.random() * 0.2;
+                this.heading = Math.random() * Math.PI * 2;
+                this.fuel = 100;
+                
+                this.createMesh();
+            }
+            
+            createMesh() {
+                let geometry, color;
+                
+                if (this.vehicleType === 'naval') {
+                    geometry = new THREE.BoxGeometry(0.15, 0.05, 0.3);
+                    color = 0x004488;
+                } else {
+                    geometry = new THREE.ConeGeometry(0.05, 0.2, 4);
+                    color = 0x888888;
+                }
+                
+                const material = new THREE.MeshPhongMaterial({
+                    color: color,
+                    emissive: color,
+                    emissiveIntensity: 0.2
+                });
+                
+                this.mesh = new THREE.Mesh(geometry, material);
+                this.updatePosition();
+            }
+            
+            update(time, speed) {
+                if (this.fuel > 0) {
+                    // Move along heading
+                    this.data.lat += Math.cos(this.heading) * this.speed * speed;
+                    this.data.lon += Math.sin(this.heading) * this.speed * speed;
+                    
+                    // Wrap longitude
+                    this.data.lon = ((this.data.lon + 180) % 360) - 180;
+                    this.data.lat = Math.max(-85, Math.min(85, this.data.lat));
+                    
+                    // Consume fuel
+                    this.fuel -= 0.1 * speed;
+                    
+                    // Occasionally change heading
+                    if (Math.random() < 0.01 * speed) {
+                        this.heading += (Math.random() - 0.5) * 0.5;
+                    }
+                    
+                    this.updatePosition();
+                }
+            }
+            
+            updatePosition() {
+                const altitude = this.vehicleType === 'naval' ? 5.02 : 5.5;
+                const pos = this.latLonToCartesian(this.data.lat, this.data.lon, altitude);
+                this.mesh.position.copy(pos);
+            }
+            
+            latLonToCartesian(lat, lon, radius) {
+                const phi = (90 - lat) * (Math.PI / 180);
+                const theta = (lon + 180) * (Math.PI / 180);
+                
+                return new THREE.Vector3(
+                    -radius * Math.sin(phi) * Math.cos(theta),
+                    radius * Math.cos(phi),
+                    radius * Math.sin(phi) * Math.sin(theta)
+                );
+            }
+            
+            getDisplayName() {
+                return `${this.vehicleType === 'naval' ? 'Naval Vessel' : 'Aircraft'} #${this.id.slice(-4)}`;
+            }
+            
+            getDetailsHTML() {
+                return `
+                    <div class="detail-item">Type: <span class="detail-value">${this.vehicleType}</span></div>
+                    <div class="detail-item">Fuel: <span class="detail-value">${this.fuel.toFixed(1)}%</span></div>
+                    <div class="detail-item">Speed: <span class="detail-value">${this.speed.toFixed(2)}</span></div>
+                    <div class="detail-item">Position: <span class="detail-value">${this.data.lat.toFixed(2)}, ${this.data.lon.toFixed(2)}</span></div>
+                `;
+            }
+        }
+        
+        // Intelligence System
+        class IntelligenceSystem {
+            constructor() {
+                this.messages = [];
+                this.maxMessages = 20;
+            }
+            
+            addMessage(category, text) {
+                const message = {
+                    category,
+                    text,
+                    timestamp: new Date().toLocaleTimeString()
+                };
+                
+                this.messages.unshift(message);
+                if (this.messages.length > this.maxMessages) {
+                    this.messages.pop();
+                }
+                
+                this.updateUI();
+            }
+            
+            updateUI() {
+                const container = document.getElementById('intelContainer');
+                if (!container) return;
+                
+                container.innerHTML = this.messages.map(msg => `
+                    <div class="intel-item">
+                        <div class="intel-category">${msg.category}</div>
+                        <div class="intel-text">${msg.text}</div>
+                        <div class="intel-timestamp">${msg.timestamp}</div>
+                    </div>
+                `).join('');
+            }
+            
+            clear() {
+                this.messages = [];
+                this.updateUI();
+            }
+        }
+        
+        // Audio System
+        class AudioSystem {
+            constructor() {
+                this.context = null;
+                this.sounds = new Map();
+                this.ambientPlaying = false;
+            }
+            
+            async init() {
+                try {
+                    this.context = new (window.AudioContext || window.webkitAudioContext)();
+                    await this.loadSounds();
+                } catch (error) {
+                    console.log('Audio not supported');
+                }
+            }
+            
+            async loadSounds() {
+                // Generate synthetic sounds
+                this.generateSound('select', 800, 0.1);
+                this.generateSound('action', 400, 0.3);
+                this.generateSound('event', 600, 0.2);
+                this.generateSound('alarm', 300, 1.0);
+            }
+            
+            generateSound(name, frequency, duration) {
+                const oscillator = this.context.createOscillator();
+                const gainNode = this.context.createGain();
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(this.context.destination);
+                
+                oscillator.frequency.setValueAtTime(frequency, this.context.currentTime);
+                gainNode.gain.setValueAtTime(0.1, this.context.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, this.context.currentTime + duration);
+                
+                this.sounds.set(name, { oscillator, gainNode, duration });
+            }
+            
+            playSound(name) {
+                if (!this.context) return;
+                
+                const sound = this.sounds.get(name);
+                if (sound) {
+                    const oscillator = this.context.createOscillator();
+                    const gainNode = this.context.createGain();
+                    
+                    oscillator.connect(gainNode);
+                    gainNode.connect(this.context.destination);
+                    
+                    oscillator.frequency.setValueAtTime(
+                        sound.oscillator.frequency.value,
+                        this.context.currentTime
+                    );
+                    gainNode.gain.setValueAtTime(0.05, this.context.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, this.context.currentTime + sound.duration);
+                    
+                    oscillator.start();
+                    oscillator.stop(this.context.currentTime + sound.duration);
+                }
+            }
+            
+            playAmbient() {
+                const ambientAudio = document.getElementById('audioAmbient');
+                if (ambientAudio) {
+                    ambientAudio.volume = 0.1;
+                    ambientAudio.play().catch(() => {});
+                    this.ambientPlaying = true;
+                }
+            }
+            
+            pauseAmbient() {
+                const ambientAudio = document.getElementById('audioAmbient');
+                if (ambientAudio) {
+                    ambientAudio.pause();
+                    this.ambientPlaying = false;
+                }
+            }
+            
+            resumeAmbient() {
+                const ambientAudio = document.getElementById('audioAmbient');
+                if (ambientAudio) {
+                    ambientAudio.play().catch(() => {});
+                    this.ambientPlaying = true;
+                }
+            }
+        }
+        
+        // Effects System
+        class EffectsSystem {
+            constructor() {
+                this.effects = [];
+            }
+            
+            addEffect(effect) {
+                this.effects.push(effect);
+            }
+            
+            update(time, speed) {
+                this.effects = this.effects.filter(effect => {
+                    effect.update(time, speed);
+                    return !effect.finished;
+                });
+            }
+        }
+        
+        // Global Functions
+        function setGameMode(mode) {
+            if (window.game) {
+                window.game.setGameMode(mode);
+            }
+        }
+        
+        function togglePause() {
+            if (window.game) {
+                window.game.togglePause();
+            }
+        }
+        
+        function changeSpeed() {
+            if (window.game) {
+                window.game.changeSpeed();
+            }
+        }
+        
+        function resetSimulation() {
+            if (window.game) {
+                window.game.resetSimulation();
+            }
+        }
+        
+        function deployAction(actionType) {
+            if (window.game) {
+                window.game.deployAction(actionType);
+            }
+        }
+        
+        function dismissAlert() {
+            if (window.game) {
+                window.game.dismissAlert();
+            }
+        }
+        
+        // Initialize Game
+        window.addEventListener('load', async () => {
+            // Loading progress simulation
+            const progressBar = document.getElementById('loadingProgress');
+            const loadingSteps = [
+                'Initializing quantum processors...',
+                'Establishing satellite links...',
+                'Loading global databases...',
+                'Activating defense networks...',
+                'Synchronizing intelligence feeds...',
+                'Deploying command interface...'
+            ];
+            
+            for (let i = 0; i < loadingSteps.length; i++) {
+                document.querySelector('.loading-subtitle').textContent = loadingSteps[i];
+                progressBar.style.width = `${((i + 1) / loadingSteps.length) * 100}%`;
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+            
+            // Initialize the game
+            window.game = new GlobalCommandCenter();
+        });
+    </script>
+</body>
+</html>

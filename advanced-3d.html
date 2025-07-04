@@ -1,0 +1,1790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Global Crisis Simulator - Advanced Command Center</title>
+    <meta name="description" content="Advanced 3D global crisis simulation with emergent gameplay and extensible threat modeling">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Orbitron:wght@400;500;600;700&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: radial-gradient(circle at center, #0a0a1a 0%, #000000 100%);
+            color: #e0e0e0;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        #gameCanvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        
+        .hud {
+            position: fixed;
+            top: 15px;
+            left: 15px;
+            right: 15px;
+            z-index: 10;
+            pointer-events: none;
+        }
+        
+        .hud > * {
+            pointer-events: auto;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+        
+        .stat-card {
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 12px;
+            backdrop-filter: blur(15px);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        .stat-card h3 {
+            font-size: 11px;
+            font-weight: 500;
+            color: #888;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .stat-value {
+            font-size: 20px;
+            font-weight: 700;
+            font-family: 'Orbitron', monospace;
+        }
+        
+        .stat-change {
+            font-size: 10px;
+            margin-left: 8px;
+            font-weight: 500;
+        }
+        
+        .stat-change.positive { color: #10b981; }
+        .stat-change.negative { color: #ef4444; }
+        
+        .threat-panel {
+            position: fixed;
+            bottom: 15px;
+            left: 15px;
+            right: 15px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 20px;
+            backdrop-filter: blur(20px);
+            z-index: 10;
+            box-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
+        }
+        
+        .threat-categories {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .threat-category {
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.3);
+        }
+        
+        .category-title {
+            font-family: 'Orbitron', monospace;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .threat-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        
+        .threat-btn {
+            background: linear-gradient(135deg, #dc2626, #b91c1c);
+            border: none;
+            border-radius: 6px;
+            padding: 8px 12px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-family: 'Inter', sans-serif;
+            font-size: 11px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .threat-btn:hover {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(220, 38, 38, 0.4);
+        }
+        
+        .threat-btn:active {
+            transform: translateY(0);
+        }
+        
+        .threat-btn.mitigation {
+            background: linear-gradient(135deg, #059669, #047857);
+        }
+        
+        .threat-btn.mitigation:hover {
+            background: linear-gradient(135deg, #10b981, #059669);
+            box-shadow: 0 6px 20px rgba(5, 150, 105, 0.4);
+        }
+        
+        .threat-btn.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+        
+        .threat-btn .cost {
+            position: absolute;
+            top: 2px;
+            right: 4px;
+            font-size: 8px;
+            opacity: 0.7;
+        }
+        
+        .mode-controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            justify-content: center;
+            padding-top: 15px;
+            border-top: 1px solid #333;
+        }
+        
+        .mode-btn {
+            background: linear-gradient(135deg, #374151, #1f2937);
+            border: none;
+            border-radius: 6px;
+            padding: 8px 16px;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-family: 'Inter', sans-serif;
+            font-size: 12px;
+        }
+        
+        .mode-btn.active {
+            background: linear-gradient(135deg, #dc2626, #b91c1c);
+            box-shadow: 0 4px 15px rgba(220, 38, 38, 0.3);
+        }
+        
+        .mode-btn:hover {
+            transform: translateY(-1px);
+        }
+        
+        .context-menu {
+            position: fixed;
+            background: rgba(0, 0, 0, 0.95);
+            border: 1px solid #555;
+            border-radius: 10px;
+            padding: 15px;
+            z-index: 25;
+            backdrop-filter: blur(20px);
+            min-width: 280px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+        }
+        
+        .context-menu h4 {
+            margin-bottom: 10px;
+            color: #fff;
+            font-family: 'Orbitron', monospace;
+            font-size: 14px;
+        }
+        
+        .context-menu .detail {
+            color: #aaa;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+        
+        .context-menu button {
+            width: 100%;
+            background: linear-gradient(135deg, #374151, #1f2937);
+            border: none;
+            border-radius: 5px;
+            padding: 8px;
+            color: white;
+            margin: 3px 0;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 11px;
+        }
+        
+        .context-menu button:hover {
+            background: linear-gradient(135deg, #4b5563, #374151);
+            transform: translateX(2px);
+        }
+        
+        .context-menu button.destructive {
+            background: linear-gradient(135deg, #dc2626, #b91c1c);
+        }
+        
+        .context-menu button.constructive {
+            background: linear-gradient(135deg, #059669, #047857);
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .alert-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(220, 38, 38, 0.1);
+            z-index: 20;
+            animation: crisis-pulse 3s infinite;
+            pointer-events: none;
+        }
+        
+        @keyframes crisis-pulse {
+            0%, 100% { opacity: 0; }
+            50% { opacity: 1; }
+        }
+        
+        .emergency-alert {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(220, 38, 38, 0.95);
+            border: 2px solid #ef4444;
+            border-radius: 15px;
+            padding: 30px;
+            z-index: 30;
+            text-align: center;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 15px 50px rgba(220, 38, 38, 0.5);
+        }
+        
+        .intelligence-feed {
+            position: fixed;
+            top: 15px;
+            right: 15px;
+            width: 320px;
+            max-height: 250px;
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid #333;
+            border-radius: 10px;
+            padding: 15px;
+            backdrop-filter: blur(15px);
+            z-index: 10;
+            overflow-y: auto;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        .feed-title {
+            margin-bottom: 12px;
+            font-family: 'Orbitron', monospace;
+            font-size: 12px;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .narrative-item {
+            padding: 8px 0;
+            border-bottom: 1px solid #222;
+            font-size: 11px;
+            color: #ccc;
+            line-height: 1.4;
+        }
+        
+        .narrative-item:last-child {
+            border-bottom: none;
+        }
+        
+        .narrative-item .timestamp {
+            color: #666;
+            font-size: 9px;
+        }
+        
+        .narrative-item .category {
+            color: #888;
+            font-weight: 500;
+            text-transform: uppercase;
+            font-size: 9px;
+            letter-spacing: 0.5px;
+        }
+        
+        .resource-panel {
+            position: fixed;
+            bottom: 15px;
+            right: 15px;
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid #333;
+            border-radius: 10px;
+            padding: 15px;
+            backdrop-filter: blur(15px);
+            z-index: 10;
+            min-width: 200px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        .resource-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 11px;
+        }
+        
+        .resource-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+        }
+        
+        .loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            font-size: 24px;
+            font-family: 'Orbitron', monospace;
+            z-index: 100;
+            text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+        }
+        
+        .particle-effect {
+            position: fixed;
+            pointer-events: none;
+            z-index: 5;
+        }
+        
+        .threat-indicator {
+            position: absolute;
+            border-radius: 50%;
+            animation: threat-pulse 2s infinite;
+            pointer-events: none;
+        }
+        
+        @keyframes threat-pulse {
+            0%, 100% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(1.5); opacity: 0.3; }
+        }
+        
+        .scanlines {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(transparent 50%, rgba(0, 255, 0, 0.02) 50%);
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 15;
+            animation: scanline-move 0.1s linear infinite;
+        }
+        
+        @keyframes scanline-move {
+            0% { transform: translateY(0); }
+            100% { transform: translateY(4px); }
+        }
+    </style>
+</head>
+<body>
+    <div id="loading" class="loading">🌍 Initializing Advanced Global Command Center...</div>
+    <div class="scanlines"></div>
+    <canvas id="gameCanvas"></canvas>
+    
+    <div class="hud">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>🌍 Population</h3>
+                <div class="stat-value" id="population">8.0B</div>
+                <span class="stat-change" id="populationChange"></span>
+            </div>
+            <div class="stat-card">
+                <h3>💚 Health</h3>
+                <div class="stat-value" id="health">75.0%</div>
+                <span class="stat-change" id="healthChange"></span>
+            </div>
+            <div class="stat-card">
+                <h3>🌱 Environment</h3>
+                <div class="stat-value" id="environment">60.0%</div>
+                <span class="stat-change" id="environmentChange"></span>
+            </div>
+            <div class="stat-card">
+                <h3>😰 Suffering</h3>
+                <div class="stat-value" id="suffering">25.0%</div>
+                <span class="stat-change" id="sufferingChange"></span>
+            </div>
+            <div class="stat-card">
+                <h3>🧠 Psychology</h3>
+                <div class="stat-value" id="psychology">70.0%</div>
+                <span class="stat-change" id="psychologyChange"></span>
+            </div>
+            <div class="stat-card">
+                <h3>🔬 Technology</h3>
+                <div class="stat-value" id="technology">80.0%</div>
+                <span class="stat-change" id="technologyChange"></span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="intelligence-feed">
+        <div class="feed-title">📡 INTELLIGENCE FEED</div>
+        <div id="narrativeContainer"></div>
+    </div>
+    
+    <div class="resource-panel">
+        <div class="feed-title">💰 RESOURCES</div>
+        <div class="resource-item">
+            <span>🪙 Credits:</span>
+            <span class="resource-value" id="credits">1000</span>
+        </div>
+        <div class="resource-item">
+            <span>⚡ Energy:</span>
+            <span class="resource-value" id="energy">500</span>
+        </div>
+        <div class="resource-item">
+            <span>🧪 Research:</span>
+            <span class="resource-value" id="research">300</span>
+        </div>
+        <div class="resource-item">
+            <span>🛡️ Defense:</span>
+            <span class="resource-value" id="defense">200</span>
+        </div>
+    </div>
+    
+    <div class="threat-panel">
+        <div class="threat-categories">
+            <div class="threat-category">
+                <div class="category-title">⚔️ WARFARE</div>
+                <div class="threat-buttons">
+                    <button class="threat-btn" onclick="deployThreat('NUCLEAR_STRIKE')" data-cost="500">
+                        ☢️ Nuclear Strike
+                        <span class="cost">500💰</span>
+                    </button>
+                    <button class="threat-btn mitigation" onclick="deployThreat('NUCLEAR_DISARMAMENT')" data-cost="300">
+                        🕊️ Disarmament
+                        <span class="cost">300💰</span>
+                    </button>
+                    <button class="threat-btn" onclick="deployThreat('BIOLOGICAL_WEAPON')" data-cost="200">
+                        🦠 Bio Weapon
+                        <span class="cost">200💰</span>
+                    </button>
+                    <button class="threat-btn mitigation" onclick="deployThreat('MEDICAL_BREAKTHROUGH')" data-cost="400">
+                        💊 Medical Aid
+                        <span class="cost">400💰</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="threat-category">
+                <div class="category-title">🧠 PSYCHOLOGICAL</div>
+                <div class="threat-buttons">
+                    <button class="threat-btn" onclick="deployThreat('PSYCHOTROPIC_WARFARE')" data-cost="300">
+                        🧪 Psychotropic War
+                        <span class="cost">300💰</span>
+                    </button>
+                    <button class="threat-btn mitigation" onclick="deployThreat('MENTAL_HEALTH_PROGRAM')" data-cost="250">
+                        🧘 Mental Health
+                        <span class="cost">250💰</span>
+                    </button>
+                    <button class="threat-btn" onclick="deployThreat('MASS_MEDIA_PROPAGANDA')" data-cost="150">
+                        📺 Propaganda
+                        <span class="cost">150💰</span>
+                    </button>
+                    <button class="threat-btn mitigation" onclick="deployThreat('TRUTH_CAMPAIGN')" data-cost="200">
+                        📰 Truth Campaign
+                        <span class="cost">200💰</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="threat-category">
+                <div class="category-title">💻 TECHNOLOGY</div>
+                <div class="threat-buttons">
+                    <button class="threat-btn" onclick="deployThreat('CYBER_ATTACK')" data-cost="100">
+                        💻 Cyber Attack
+                        <span class="cost">100💰</span>
+                    </button>
+                    <button class="threat-btn mitigation" onclick="deployThreat('CYBER_DEFENSE')" data-cost="150">
+                        🛡️ Cyber Defense
+                        <span class="cost">150💰</span>
+                    </button>
+                    <button class="threat-btn" onclick="deployThreat('ROGUE_AI')" data-cost="400">
+                        🤖 Rogue AI
+                        <span class="cost">400💰</span>
+                    </button>
+                    <button class="threat-btn mitigation" onclick="deployThreat('AI_SAFETY')" data-cost="350">
+                        ✅ AI Safety
+                        <span class="cost">350💰</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="threat-category">
+                <div class="category-title">🌌 EXOTIC</div>
+                <div class="threat-buttons">
+                    <button class="threat-btn" onclick="deployThreat('ALIEN_CONTACT')" data-cost="600">
+                        👽 Alien Contact
+                        <span class="cost">600💰</span>
+                    </button>
+                    <button class="threat-btn mitigation" onclick="deployThreat('FIRST_CONTACT_PROTOCOL')" data-cost="400">
+                        🤝 Diplomacy
+                        <span class="cost">400💰</span>
+                    </button>
+                    <button class="threat-btn" onclick="deployThreat('INTERDIMENSIONAL_BREACH')" data-cost="800">
+                        🌀 Dimension Breach
+                        <span class="cost">800💰</span>
+                    </button>
+                    <button class="threat-btn mitigation" onclick="deployThreat('REALITY_STABILIZER')" data-cost="700">
+                        🔮 Stabilizer
+                        <span class="cost">700💰</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="threat-category">
+                <div class="category-title">🏭 ENVIRONMENTAL</div>
+                <div class="threat-buttons">
+                    <button class="threat-btn" onclick="deployThreat('INDUSTRIAL_POLLUTION')" data-cost="50">
+                        🏭 Pollution
+                        <span class="cost">50💰</span>
+                    </button>
+                    <button class="threat-btn mitigation" onclick="deployThreat('GREEN_TECHNOLOGY')" data-cost="300">
+                        🌱 Green Tech
+                        <span class="cost">300💰</span>
+                    </button>
+                    <button class="threat-btn" onclick="deployThreat('SOLAR_FLARE')" data-cost="0">
+                        ☀️ Solar Flare
+                        <span class="cost">0💰</span>
+                    </button>
+                    <button class="threat-btn mitigation" onclick="deployThreat('SPACE_SHIELD')" data-cost="500">
+                        🛡️ Space Shield
+                        <span class="cost">500💰</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="threat-category">
+                <div class="category-title">🚁 FACILITIES</div>
+                <div class="threat-buttons">
+                    <button class="threat-btn" onclick="deployThreat('UNDERGROUND_BASE')" data-cost="400">
+                        🕳️ Underground Base
+                        <span class="cost">400💰</span>
+                    </button>
+                    <button class="threat-btn mitigation" onclick="deployThreat('FACILITY_RAID')" data-cost="300">
+                        🔍 Raid Facility
+                        <span class="cost">300💰</span>
+                    </button>
+                    <button class="threat-btn" onclick="deployThreat('DRONE_SWARM')" data-cost="250">
+                        🚁 Drone Swarm
+                        <span class="cost">250💰</span>
+                    </button>
+                    <button class="threat-btn mitigation" onclick="deployThreat('EMP_DEFENSE')" data-cost="200">
+                        ⚡ EMP Defense
+                        <span class="cost">200💰</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="mode-controls">
+            <button class="mode-btn" id="evilMode" onclick="setMode('evil')">🔥 Maximize Chaos</button>
+            <button class="mode-btn active" id="neutralMode" onclick="setMode('neutral')">🎯 Observe & Learn</button>
+            <button class="mode-btn" id="goodMode" onclick="setMode('good')">🛡️ Protect Humanity</button>
+            <button class="mode-btn" onclick="togglePause()" id="pauseBtn">⏸️ Pause</button>
+            <button class="mode-btn" onclick="resetSimulation()">🔄 Reset</button>
+            <button class="mode-btn" onclick="toggleSpeed()" id="speedBtn">⚡ Speed: 1x</button>
+        </div>
+    </div>
+    
+    <div id="contextMenu" class="context-menu hidden"></div>
+    <div id="alertOverlay" class="alert-overlay hidden"></div>
+    <div id="emergencyAlert" class="emergency-alert hidden">
+        <h2>🚨 GLOBAL CRISIS DETECTED</h2>
+        <p>Critical systems failing worldwide</p>
+        <button onclick="closeAlert()" style="margin-top: 15px; background: #374151; border: none; padding: 10px 20px; border-radius: 6px; color: white; cursor: pointer;">Acknowledge</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.1/three.min.js"></script>
+    <script>
+        // Enhanced Game State with extensible architecture
+        class GameState {
+            constructor() {
+                this.metrics = {
+                    population: 8000000000,
+                    health: 75,
+                    environment: 60,
+                    suffering: 25,
+                    psychology: 70,
+                    technology: 80
+                };
+                
+                this.resources = {
+                    credits: 1000,
+                    energy: 500,
+                    research: 300,
+                    defense: 200
+                };
+                
+                this.mode = 'neutral';
+                this.paused = false;
+                this.speed = 1;
+                this.time = 0;
+                this.narrative = [];
+                this.regions = [];
+                this.entities = new Map();
+                this.effects = [];
+                this.previousMetrics = { ...this.metrics };
+            }
+            
+            update() {
+                if (this.paused) return;
+                
+                this.time += 0.016 * this.speed;
+                
+                // Generate resources over time
+                this.resources.credits += 2 * this.speed;
+                this.resources.energy += 1 * this.speed;
+                this.resources.research += 0.5 * this.speed;
+                this.resources.defense += 0.3 * this.speed;
+                
+                // Process entities
+                this.entities.forEach(entity => entity.update(this));
+                
+                // Process effects
+                this.effects = this.effects.filter(effect => {
+                    effect.update(this);
+                    return !effect.finished;
+                });
+                
+                // Random events
+                if (Math.random() < 0.0005 * this.speed) {
+                    this.spawnRandomEvent();
+                }
+                
+                // Apply gradual changes
+                this.applyGradualChanges();
+                
+                // Check for crisis
+                this.checkCrisis();
+                
+                // Update display
+                this.updateDisplay();
+            }
+            
+            spawnRandomEvent() {
+                const events = [
+                    { text: '🌊 Tsunami detected in Pacific Ring', effects: { population: -5000000, health: -2 } },
+                    { text: '🔬 Medical breakthrough in gene therapy', effects: { health: +3, technology: +1 } },
+                    { text: '☄️ Asteroid near-miss detected', effects: { psychology: -5 } },
+                    { text: '🌿 Reforestation project success', effects: { environment: +2 } },
+                    { text: '💻 Global internet outage resolved', effects: { technology: -1, psychology: -2 } },
+                    { text: '🛰️ Satellite collision averted', effects: { technology: +1 } },
+                    { text: '🦠 New disease strain contained', effects: { health: -1, suffering: +2 } },
+                    { text: '⚡ Solar storm affects communications', effects: { technology: -2 } }
+                ];
+                
+                const event = events[Math.floor(Math.random() * events.length)];
+                this.applyEffects(event.effects);
+                this.addNarrative(event.text, 'RANDOM');
+            }
+            
+            applyGradualChanges() {
+                // Environmental degradation
+                this.metrics.environment -= 0.01 * this.speed;
+                
+                // Technology advancement
+                this.metrics.technology += 0.005 * this.speed;
+                
+                // Population growth
+                this.metrics.population += 1000 * this.speed;
+                
+                // Clamp values
+                Object.keys(this.metrics).forEach(key => {
+                    if (key === 'population') {
+                        this.metrics[key] = Math.max(0, this.metrics[key]);
+                    } else {
+                        this.metrics[key] = Math.max(0, Math.min(100, this.metrics[key]));
+                    }
+                });
+                
+                Object.keys(this.resources).forEach(key => {
+                    this.resources[key] = Math.max(0, this.resources[key]);
+                });
+            }
+            
+            applyEffects(effects) {
+                Object.keys(effects).forEach(key => {
+                    if (this.metrics[key] !== undefined) {
+                        this.metrics[key] += effects[key];
+                    } else if (this.resources[key] !== undefined) {
+                        this.resources[key] += effects[key];
+                    }
+                });
+            }
+            
+            addNarrative(text, category = 'SYSTEM') {
+                this.narrative.unshift({
+                    text,
+                    category,
+                    timestamp: new Date().toLocaleTimeString()
+                });
+                if (this.narrative.length > 20) {
+                    this.narrative.pop();
+                }
+            }
+            
+            checkCrisis() {
+                const crisisThreshold = 80;
+                if (this.metrics.suffering > crisisThreshold) {
+                    document.getElementById('emergencyAlert').classList.remove('hidden');
+                    document.getElementById('alertOverlay').classList.remove('hidden');
+                }
+            }
+            
+            updateDisplay() {
+                // Update metrics with change indicators
+                Object.keys(this.metrics).forEach(key => {
+                    const element = document.getElementById(key);
+                    const changeElement = document.getElementById(key + 'Change');
+                    
+                    if (element) {
+                        if (key === 'population') {
+                            element.textContent = (this.metrics[key] / 1000000000).toFixed(1) + 'B';
+                        } else {
+                            element.textContent = this.metrics[key].toFixed(1) + '%';
+                        }
+                    }
+                    
+                    if (changeElement) {
+                        const change = this.metrics[key] - this.previousMetrics[key];
+                        if (Math.abs(change) > 0.1) {
+                            changeElement.textContent = (change > 0 ? '+' : '') + change.toFixed(1);
+                            changeElement.className = 'stat-change ' + (change > 0 ? 'positive' : 'negative');
+                        } else {
+                            changeElement.textContent = '';
+                        }
+                    }
+                });
+                
+                // Update resources
+                Object.keys(this.resources).forEach(key => {
+                    const element = document.getElementById(key);
+                    if (element) {
+                        element.textContent = Math.floor(this.resources[key]);
+                    }
+                });
+                
+                // Update narrative
+                const container = document.getElementById('narrativeContainer');
+                container.innerHTML = this.narrative
+                    .map(item => `
+                        <div class="narrative-item">
+                            <div class="category">${item.category}</div>
+                            <div>${item.text}</div>
+                            <div class="timestamp">${item.timestamp}</div>
+                        </div>
+                    `).join('');
+                
+                // Update button states
+                document.querySelectorAll('.threat-btn').forEach(btn => {
+                    const cost = parseInt(btn.dataset.cost || 0);
+                    if (this.resources.credits < cost) {
+                        btn.classList.add('disabled');
+                    } else {
+                        btn.classList.remove('disabled');
+                    }
+                });
+                
+                // Store previous metrics for change calculation
+                this.previousMetrics = { ...this.metrics };
+            }
+        }
+        
+        // Entity System for extensible gameplay components
+        class Entity {
+            constructor(type, position, data = {}) {
+                this.type = type;
+                this.position = position;
+                this.data = data;
+                this.age = 0;
+                this.active = true;
+            }
+            
+            update(gameState) {
+                this.age += 0.016 * gameState.speed;
+            }
+        }
+        
+        class ThreatEntity extends Entity {
+            constructor(type, position, data) {
+                super(type, position, data);
+                this.duration = data.duration || 10;
+                this.effects = data.effects || {};
+                this.spreading = data.spreading || false;
+                this.spreadRadius = data.spreadRadius || 1;
+            }
+            
+            update(gameState) {
+                super.update(gameState);
+                
+                // Apply effects over time
+                if (this.age < this.duration) {
+                    const intensity = 1 - (this.age / this.duration);
+                    Object.keys(this.effects).forEach(key => {
+                        const effect = this.effects[key] * intensity * 0.016;
+                        gameState.applyEffects({ [key]: effect });
+                    });
+                }
+                
+                // Check if finished
+                if (this.age >= this.duration) {
+                    this.active = false;
+                }
+            }
+        }
+        
+        class ParticleEffect {
+            constructor(position, type, duration = 3) {
+                this.position = position;
+                this.type = type;
+                this.duration = duration;
+                this.age = 0;
+                this.finished = false;
+                this.particles = [];
+                this.createParticles();
+            }
+            
+            createParticles() {
+                const count = this.getParticleCount();
+                for (let i = 0; i < count; i++) {
+                    this.particles.push({
+                        x: this.position.x + (Math.random() - 0.5) * 2,
+                        y: this.position.y + (Math.random() - 0.5) * 2,
+                        z: this.position.z + (Math.random() - 0.5) * 2,
+                        vx: (Math.random() - 0.5) * 0.1,
+                        vy: (Math.random() - 0.5) * 0.1,
+                        vz: (Math.random() - 0.5) * 0.1,
+                        life: 1,
+                        color: this.getParticleColor()
+                    });
+                }
+            }
+            
+            getParticleCount() {
+                switch (this.type) {
+                    case 'explosion': return 50;
+                    case 'infection': return 30;
+                    case 'portal': return 40;
+                    case 'energy': return 25;
+                    default: return 20;
+                }
+            }
+            
+            getParticleColor() {
+                switch (this.type) {
+                    case 'explosion': return 0xff4400;
+                    case 'infection': return 0x00ff00;
+                    case 'portal': return 0x8800ff;
+                    case 'energy': return 0x00ffff;
+                    default: return 0xffffff;
+                }
+            }
+            
+            update(gameState) {
+                this.age += 0.016 * gameState.speed;
+                
+                this.particles.forEach(particle => {
+                    particle.x += particle.vx;
+                    particle.y += particle.vy;
+                    particle.z += particle.vz;
+                    particle.life -= 0.016 / this.duration;
+                });
+                
+                this.particles = this.particles.filter(p => p.life > 0);
+                
+                if (this.age >= this.duration || this.particles.length === 0) {
+                    this.finished = true;
+                }
+            }
+        }
+        
+        // Enhanced 3D Engine
+        let scene, camera, renderer, earth, atmosphere;
+        let satellites = [];
+        let regionMarkers = [];
+        let threatMarkers = [];
+        let hotspots = [];
+        let gameState = new GameState();
+        let particleSystem;
+        
+        const THREAT_DEFINITIONS = {
+            // Warfare
+            NUCLEAR_STRIKE: {
+                name: 'Nuclear Strike',
+                cost: 500,
+                effects: { population: -800000000, health: -40, environment: -35, suffering: +50, psychology: -30 },
+                visual: 'explosion',
+                color: 0xff0000,
+                duration: 15
+            },
+            NUCLEAR_DISARMAMENT: {
+                name: 'Nuclear Disarmament',
+                cost: 300,
+                effects: { psychology: +10, suffering: -15, defense: +50 },
+                visual: 'energy',
+                color: 0x00ff00,
+                duration: 10
+            },
+            
+            // Psychological
+            PSYCHOTROPIC_WARFARE: {
+                name: 'Psychotropic Warfare',
+                cost: 300,
+                effects: { psychology: -40, health: -20, suffering: +35 },
+                visual: 'portal',
+                color: 0xff00ff,
+                duration: 20
+            },
+            MENTAL_HEALTH_PROGRAM: {
+                name: 'Mental Health Program',
+                cost: 250,
+                effects: { psychology: +25, health: +10, suffering: -20 },
+                visual: 'energy',
+                color: 0x00ffff,
+                duration: 15
+            },
+            
+            // Technology
+            ROGUE_AI: {
+                name: 'Rogue AI',
+                cost: 400,
+                effects: { technology: -30, psychology: -25, population: -100000000, suffering: +30 },
+                visual: 'energy',
+                color: 0xff0088,
+                duration: 25
+            },
+            AI_SAFETY: {
+                name: 'AI Safety Protocol',
+                cost: 350,
+                effects: { technology: +20, psychology: +15, suffering: -10 },
+                visual: 'energy',
+                color: 0x0088ff,
+                duration: 20
+            },
+            
+            // Exotic
+            ALIEN_CONTACT: {
+                name: 'Alien Contact',
+                cost: 600,
+                effects: { technology: +30, psychology: -20, population: -50000000, suffering: +25 },
+                visual: 'portal',
+                color: 0x00ff88,
+                duration: 30
+            },
+            INTERDIMENSIONAL_BREACH: {
+                name: 'Interdimensional Breach',
+                cost: 800,
+                effects: { psychology: -50, technology: -25, population: -200000000, suffering: +40 },
+                visual: 'portal',
+                color: 0x8800ff,
+                duration: 35
+            },
+            
+            // Environmental
+            INDUSTRIAL_POLLUTION: {
+                name: 'Industrial Pollution',
+                cost: 50,
+                effects: { environment: -15, health: -10, suffering: +8 },
+                visual: 'infection',
+                color: 0x654321,
+                duration: 12
+            },
+            SOLAR_FLARE: {
+                name: 'Solar Flare',
+                cost: 0,
+                effects: { technology: -20, energy: -100, psychology: -10 },
+                visual: 'energy',
+                color: 0xffff00,
+                duration: 8
+            },
+            
+            // Facilities
+            UNDERGROUND_BASE: {
+                name: 'Underground Base',
+                cost: 400,
+                effects: { defense: +100, psychology: -15, technology: +10 },
+                visual: 'energy',
+                color: 0x444444,
+                duration: 25
+            },
+            DRONE_SWARM: {
+                name: 'Drone Swarm',
+                cost: 250,
+                effects: { technology: +5, psychology: -20, suffering: +15 },
+                visual: 'explosion',
+                color: 0x888888,
+                duration: 10
+            }
+        };
+        
+        async function initEarth() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ 
+                canvas: document.getElementById('gameCanvas'), 
+                antialias: true,
+                alpha: true
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setClearColor(0x000011, 1);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            
+            // Enhanced lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            directionalLight.position.set(5, 3, 5);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            scene.add(directionalLight);
+            
+            // Point light for dramatic effect
+            const pointLight = new THREE.PointLight(0x4488ff, 0.8, 100);
+            pointLight.position.set(-10, 0, 10);
+            scene.add(pointLight);
+            
+            // Create enhanced Earth
+            await createEarth();
+            createAtmosphere();
+            createStarfield();
+            createSatellites();
+            createRegions();
+            createHotspots();
+            
+            // Initialize particle system
+            particleSystem = new THREE.Group();
+            scene.add(particleSystem);
+            
+            // Camera position
+            camera.position.set(0, 0, 15);
+            
+            // Enhanced controls
+            setupControls();
+            
+            // Start animation
+            animate();
+            
+            gameState.addNarrative('🌍 Global Command Center operational', 'SYSTEM');
+            gameState.addNarrative('🛰️ Satellite networks synchronized', 'TECH');
+            gameState.addNarrative('📡 Intelligence systems online', 'INTEL');
+            
+            document.getElementById('loading').style.display = 'none';
+        }
+        
+        async function createEarth() {
+            const earthGeometry = new THREE.SphereGeometry(5, 128, 128);
+            
+            // Enhanced procedural texture
+            const canvas = document.createElement('canvas');
+            canvas.width = 1024;
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+            
+            // Ocean base
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            gradient.addColorStop(0, '#1e3a8a');
+            gradient.addColorStop(0.3, '#1e40af');
+            gradient.addColorStop(0.7, '#2563eb');
+            gradient.addColorStop(1, '#1d4ed8');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Enhanced continents with more detail
+            ctx.fillStyle = '#22c55e';
+            
+            // North America (more detailed)
+            drawContinent(ctx, 80, 100, [
+                [0, 0], [120, -20], [100, 40], [80, 80], [40, 60], [-20, 40], [0, 0]
+            ]);
+            
+            // South America
+            drawContinent(ctx, 120, 200, [
+                [0, 0], [60, -10], [40, 120], [20, 140], [-10, 100], [0, 0]
+            ]);
+            
+            // Europe
+            drawContinent(ctx, 420, 120, [
+                [0, 0], [80, -20], [60, 60], [20, 40], [0, 0]
+            ]);
+            
+            // Africa
+            drawContinent(ctx, 440, 160, [
+                [0, 0], [100, -40], [120, 120], [80, 200], [20, 180], [-20, 100], [0, 0]
+            ]);
+            
+            // Asia
+            drawContinent(ctx, 520, 100, [
+                [0, 0], [200, -30], [180, 100], [120, 120], [40, 80], [0, 0]
+            ]);
+            
+            // Australia
+            drawContinent(ctx, 720, 280, [
+                [0, 0], [120, -20], [100, 60], [20, 40], [0, 0]
+            ]);
+            
+            // Add islands and details
+            for (let i = 0; i < 50; i++) {
+                const x = Math.random() * canvas.width;
+                const y = Math.random() * canvas.height;
+                const size = Math.random() * 10 + 2;
+                ctx.beginPath();
+                ctx.arc(x, y, size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            const earthTexture = new THREE.CanvasTexture(canvas);
+            
+            // Normal map for terrain detail
+            const normalCanvas = document.createElement('canvas');
+            normalCanvas.width = 512;
+            normalCanvas.height = 256;
+            const normalCtx = normalCanvas.getContext('2d');
+            
+            const normalGradient = normalCtx.createRadialGradient(256, 128, 0, 256, 128, 256);
+            normalGradient.addColorStop(0, '#8080ff');
+            normalGradient.addColorStop(1, '#4040ff');
+            normalCtx.fillStyle = normalGradient;
+            normalCtx.fillRect(0, 0, normalCanvas.width, normalCanvas.height);
+            
+            const normalTexture = new THREE.CanvasTexture(normalCanvas);
+            
+            const earthMaterial = new THREE.MeshPhongMaterial({ 
+                map: earthTexture,
+                normalMap: normalTexture,
+                shininess: 30,
+                specular: 0x111111
+            });
+            
+            earth = new THREE.Mesh(earthGeometry, earthMaterial);
+            earth.receiveShadow = true;
+            scene.add(earth);
+        }
+        
+        function drawContinent(ctx, x, y, points) {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.beginPath();
+            ctx.moveTo(points[0][0], points[0][1]);
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(points[i][0], points[i][1]);
+            }
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+        }
+        
+        function createAtmosphere() {
+            const atmosphereGeometry = new THREE.SphereGeometry(5.2, 64, 64);
+            
+            // Enhanced atmosphere shader
+            const atmosphereMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    time: { value: 0 }
+                },
+                vertexShader: `
+                    varying vec3 vNormal;
+                    varying vec3 vPosition;
+                    void main() {
+                        vNormal = normalize(normalMatrix * normal);
+                        vPosition = position;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform float time;
+                    varying vec3 vNormal;
+                    varying vec3 vPosition;
+                    void main() {
+                        float intensity = pow(0.8 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 2.0);
+                        vec3 atmosphere = vec3(0.3, 0.6, 1.0) * intensity;
+                        float pulse = sin(time * 2.0) * 0.1 + 0.9;
+                        gl_FragColor = vec4(atmosphere * pulse, intensity * 0.8);
+                    }
+                `,
+                transparent: true,
+                side: THREE.BackSide
+            });
+            
+            atmosphere = new THREE.Mesh(atmosphereGeometry, atmosphereMaterial);
+            scene.add(atmosphere);
+        }
+        
+        function createStarfield() {
+            const starGeometry = new THREE.BufferGeometry();
+            const starCount = 15000;
+            const positions = new Float32Array(starCount * 3);
+            const colors = new Float32Array(starCount * 3);
+            
+            for (let i = 0; i < starCount * 3; i += 3) {
+                // Spherical distribution
+                const radius = 1000 + Math.random() * 1000;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(2 * Math.random() - 1);
+                
+                positions[i] = radius * Math.sin(phi) * Math.cos(theta);
+                positions[i + 1] = radius * Math.sin(phi) * Math.sin(theta);
+                positions[i + 2] = radius * Math.cos(phi);
+                
+                // Random star colors
+                const starType = Math.random();
+                if (starType < 0.3) {
+                    colors[i] = 1; colors[i + 1] = 0.8; colors[i + 2] = 0.6; // Orange
+                } else if (starType < 0.6) {
+                    colors[i] = 0.8; colors[i + 1] = 0.8; colors[i + 2] = 1; // Blue
+                } else {
+                    colors[i] = 1; colors[i + 1] = 1; colors[i + 2] = 1; // White
+                }
+            }
+            
+            starGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            starGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            
+            const starMaterial = new THREE.PointsMaterial({ 
+                size: 2,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            const stars = new THREE.Points(starGeometry, starMaterial);
+            scene.add(stars);
+        }
+        
+        function createRegions() {
+            const regions = [
+                { name: 'North America', lat: 45, lon: -100, population: 580000000, type: 'developed' },
+                { name: 'Europe', lat: 50, lon: 10, population: 750000000, type: 'developed' },
+                { name: 'East Asia', lat: 35, lon: 120, population: 1600000000, type: 'mixed' },
+                { name: 'South Asia', lat: 20, lon: 80, population: 2000000000, type: 'developing' },
+                { name: 'Africa', lat: 0, lon: 20, population: 1300000000, type: 'developing' },
+                { name: 'South America', lat: -15, lon: -60, population: 430000000, type: 'mixed' },
+                { name: 'Oceania', lat: -25, lon: 140, population: 45000000, type: 'developed' },
+                { name: 'Middle East', lat: 30, lon: 45, population: 350000000, type: 'mixed' },
+                { name: 'Russia', lat: 60, lon: 100, population: 145000000, type: 'mixed' }
+            ];
+            
+            regions.forEach(region => {
+                const marker = createRegionMarker(region);
+                regionMarkers.push(marker);
+                scene.add(marker);
+                gameState.regions.push(region);
+            });
+        }
+        
+        function createRegionMarker(region) {
+            const geometry = new THREE.SphereGeometry(0.08, 16, 16);
+            const color = region.type === 'developed' ? 0x00ff00 : 
+                         region.type === 'mixed' ? 0xffff00 : 0xff8800;
+            const material = new THREE.MeshPhongMaterial({ 
+                color,
+                emissive: color,
+                emissiveIntensity: 0.3
+            });
+            
+            const marker = new THREE.Mesh(geometry, material);
+            
+            const pos = latLonToCartesian(region.lat, region.lon, 5.15);
+            marker.position.set(pos.x, pos.y, pos.z);
+            marker.userData = region;
+            
+            return marker;
+        }
+        
+        function createSatellites() {
+            const constellations = [
+                { name: 'GPS', count: 24, altitude: 7, color: 0x00ff00, speed: 0.008 },
+                { name: 'Communications', count: 12, altitude: 8.5, color: 0x0088ff, speed: 0.006 },
+                { name: 'Surveillance', count: 8, altitude: 6.5, color: 0xff4400, speed: 0.01 },
+                { name: 'Weather', count: 6, altitude: 9, color: 0xffff00, speed: 0.005 },
+                { name: 'Military', count: 4, altitude: 7.5, color: 0xff0088, speed: 0.009 }
+            ];
+            
+            constellations.forEach(constellation => {
+                for (let i = 0; i < constellation.count; i++) {
+                    const satellite = createSatellite(constellation, i);
+                    satellites.push(satellite);
+                    scene.add(satellite);
+                }
+            });
+        }
+        
+        function createSatellite(constellation, index) {
+            const geometry = new THREE.BoxGeometry(0.06, 0.06, 0.12);
+            const material = new THREE.MeshPhongMaterial({ 
+                color: constellation.color,
+                emissive: constellation.color,
+                emissiveIntensity: 0.2
+            });
+            
+            const satellite = new THREE.Mesh(geometry, material);
+            
+            const angle = (index / constellation.count) * Math.PI * 2;
+            const inclination = (Math.random() - 0.5) * 0.5;
+            const x = Math.cos(angle) * constellation.altitude;
+            const z = Math.sin(angle) * constellation.altitude;
+            const y = Math.sin(inclination) * 2;
+            
+            satellite.position.set(x, y, z);
+            satellite.userData = { 
+                constellation: constellation.name,
+                status: 'operational',
+                orbit: { 
+                    angle, 
+                    radius: constellation.altitude, 
+                    speed: constellation.speed,
+                    inclination
+                }
+            };
+            
+            return satellite;
+        }
+        
+        function createHotspots() {
+            const locations = [
+                { name: 'NORAD', lat: 38.7441, lon: -104.8463, type: 'military' },
+                { name: 'Pentagon', lat: 38.8719, lon: -77.0563, type: 'military' },
+                { name: 'CERN', lat: 46.2044, lon: 6.1432, type: 'research' },
+                { name: 'Area 51', lat: 37.2431, lon: -115.7930, type: 'classified' },
+                { name: 'Chernobyl', lat: 51.3890, lon: 30.0983, type: 'hazard' },
+                { name: 'Fukushima', lat: 37.4210, lon: 141.0326, type: 'hazard' },
+                { name: 'CDC Atlanta', lat: 33.7490, lon: -84.3880, type: 'medical' },
+                { name: 'WHO Geneva', lat: 46.2044, lon: 6.1432, type: 'medical' },
+                { name: 'MIT', lat: 42.3601, lon: -71.0942, type: 'research' },
+                { name: 'Silicon Valley', lat: 37.4419, lon: -122.1430, type: 'tech' }
+            ];
+            
+            locations.forEach(location => {
+                const hotspot = createHotspot(location);
+                hotspots.push(hotspot);
+                scene.add(hotspot);
+            });
+        }
+        
+        function createHotspot(location) {
+            const geometry = new THREE.ConeGeometry(0.06, 0.3, 8);
+            const color = location.type === 'military' ? 0xff0000 :
+                         location.type === 'research' ? 0x00ffff :
+                         location.type === 'classified' ? 0xff00ff :
+                         location.type === 'hazard' ? 0xff8800 :
+                         location.type === 'medical' ? 0x00ff88 :
+                         0x8888ff;
+                         
+            const material = new THREE.MeshPhongMaterial({ 
+                color,
+                emissive: color,
+                emissiveIntensity: 0.4,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            const hotspot = new THREE.Mesh(geometry, material);
+            
+            const pos = latLonToCartesian(location.lat, location.lon, 5.25);
+            hotspot.position.set(pos.x, pos.y, pos.z);
+            hotspot.lookAt(0, 0, 0);
+            hotspot.userData = location;
+            
+            return hotspot;
+        }
+        
+        function latLonToCartesian(lat, lon, radius) {
+            const phi = (90 - lat) * (Math.PI / 180);
+            const theta = (lon + 180) * (Math.PI / 180);
+            
+            return {
+                x: -radius * Math.sin(phi) * Math.cos(theta),
+                y: radius * Math.cos(phi),
+                z: radius * Math.sin(phi) * Math.sin(theta)
+            };
+        }
+        
+        function setupControls() {
+            let isDragging = false;
+            let previousMousePosition = { x: 0, y: 0 };
+            
+            renderer.domElement.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            });
+            
+            renderer.domElement.addEventListener('mousemove', (e) => {
+                if (isDragging) {
+                    const deltaMove = {
+                        x: e.clientX - previousMousePosition.x,
+                        y: e.clientY - previousMousePosition.y
+                    };
+                    
+                    earth.rotation.y += deltaMove.x * 0.005;
+                    earth.rotation.x += deltaMove.y * 0.005;
+                    atmosphere.rotation.y += deltaMove.x * 0.005;
+                    atmosphere.rotation.x += deltaMove.y * 0.005;
+                    
+                    // Rotate hotspots and region markers with Earth
+                    [...hotspots, ...regionMarkers].forEach(obj => {
+                        obj.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), deltaMove.x * 0.005);
+                        obj.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), deltaMove.y * 0.005);
+                    });
+                    
+                    previousMousePosition = { x: e.clientX, y: e.clientY };
+                }
+            });
+            
+            renderer.domElement.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+            
+            renderer.domElement.addEventListener('wheel', (e) => {
+                camera.position.z += e.deltaY * 0.01;
+                camera.position.z = Math.max(8, Math.min(30, camera.position.z));
+            });
+            
+            renderer.domElement.addEventListener('click', handleClick);
+        }
+        
+        function handleClick(event) {
+            const mouse = new THREE.Vector2();
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(mouse, camera);
+            
+            const intersects = raycaster.intersectObjects([
+                ...regionMarkers,
+                ...satellites,
+                ...hotspots,
+                ...threatMarkers
+            ]);
+            
+            if (intersects.length > 0) {
+                const object = intersects[0].object;
+                showContextMenu(event, object);
+            } else {
+                hideContextMenu();
+            }
+        }
+        
+        function showContextMenu(event, object) {
+            const menu = document.getElementById('contextMenu');
+            const data = object.userData;
+            
+            let menuContent = '';
+            
+            if (regionMarkers.includes(object)) {
+                menuContent = `
+                    <h4>${data.name}</h4>
+                    <div class="detail">Population: ${(data.population / 1000000).toFixed(1)}M</div>
+                    <div class="detail">Type: ${data.type}</div>
+                    <div class="detail">Status: ${data.status || 'Stable'}</div>
+                    <button onclick="targetRegion('${data.name}', 'NUCLEAR_STRIKE')" class="destructive">Nuclear Strike</button>
+                    <button onclick="targetRegion('${data.name}', 'BIOLOGICAL_WEAPON')" class="destructive">Bio Weapon</button>
+                    <button onclick="targetRegion('${data.name}', 'CYBER_ATTACK')" class="destructive">Cyber Attack</button>
+                    <button onclick="targetRegion('${data.name}', 'MEDICAL_BREAKTHROUGH')" class="constructive">Medical Aid</button>
+                    <button onclick="targetRegion('${data.name}', 'GREEN_TECHNOLOGY')" class="constructive">Green Tech</button>
+                `;
+            } else if (satellites.includes(object)) {
+                menuContent = `
+                    <h4>${data.constellation} Satellite</h4>
+                    <div class="detail">Status: ${data.status}</div>
+                    <div class="detail">Altitude: ${data.orbit.radius.toFixed(1)} RE</div>
+                    <button onclick="hackSatellite('${data.constellation}')" class="destructive">Hack Systems</button>
+                    <button onclick="destroySatellite('${data.constellation}')" class="destructive">Destroy</button>
+                    <button onclick="restoreSatellite('${data.constellation}')" class="constructive">Restore</button>
+                    <button onclick="upgradeSatellite('${data.constellation}')" class="constructive">Upgrade</button>
+                `;
+            } else if (hotspots.includes(object)) {
+                menuContent = `
+                    <h4>${data.name}</h4>
+                    <div class="detail">Type: ${data.type}</div>
+                    <div class="detail">Security Level: High</div>
+                    <button onclick="infiltrateLocation('${data.name}')" class="destructive">Infiltrate</button>
+                    <button onclick="attackLocation('${data.name}')" class="destructive">Attack</button>
+                    <button onclick="secureLocation('${data.name}')" class="constructive">Enhance Security</button>
+                    <button onclick="monitorLocation('${data.name}')" class="constructive">Monitor</button>
+                `;
+            }
+            
+            menu.innerHTML = menuContent;
+            menu.style.left = Math.min(event.clientX, window.innerWidth - 300) + 'px';
+            menu.style.top = Math.min(event.clientY, window.innerHeight - 200) + 'px';
+            menu.classList.remove('hidden');
+        }
+        
+        function hideContextMenu() {
+            document.getElementById('contextMenu').classList.add('hidden');
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if (!gameState.paused) {
+                // Update atmosphere shader
+                if (atmosphere.material.uniforms) {
+                    atmosphere.material.uniforms.time.value += 0.01;
+                }
+                
+                // Rotate Earth
+                earth.rotation.y += 0.001 * gameState.speed;
+                atmosphere.rotation.y += 0.0005 * gameState.speed;
+                
+                // Update satellite orbits
+                satellites.forEach(satellite => {
+                    if (satellite.userData.orbit) {
+                        satellite.userData.orbit.angle += satellite.userData.orbit.speed * gameState.speed;
+                        const orbit = satellite.userData.orbit;
+                        satellite.position.x = Math.cos(orbit.angle) * orbit.radius;
+                        satellite.position.z = Math.sin(orbit.angle) * orbit.radius;
+                        satellite.position.y = Math.sin(orbit.inclination + orbit.angle * 0.1) * 2;
+                    }
+                });
+                
+                // Pulse hotspots
+                hotspots.forEach(hotspot => {
+                    hotspot.material.opacity = 0.6 + Math.sin(Date.now() * 0.005) * 0.2;
+                    hotspot.material.emissiveIntensity = 0.4 + Math.sin(Date.now() * 0.008) * 0.2;
+                });
+                
+                // Update threat markers
+                threatMarkers.forEach(marker => {
+                    marker.rotation.y += 0.05;
+                    marker.material.emissiveIntensity = 0.5 + Math.sin(Date.now() * 0.01) * 0.3;
+                });
+                
+                // Update game state
+                gameState.update();
+            }
+            
+            renderer.render(scene, camera);
+        }
+        
+        function deployThreat(threatType) {
+            const threat = THREAT_DEFINITIONS[threatType];
+            if (!threat) return;
+            
+            // Check if player can afford it
+            if (gameState.resources.credits < threat.cost) {
+                gameState.addNarrative(`❌ Insufficient credits for ${threat.name}`, 'ERROR');
+                return;
+            }
+            
+            // Deduct cost
+            gameState.resources.credits -= threat.cost;
+            
+            // Apply effects
+            gameState.applyEffects(threat.effects);
+            
+            // Add to narrative
+            gameState.addNarrative(`🎯 ${threat.name} deployed globally`, 'ACTION');
+            
+            // Create visual effect
+            createThreatEffect(threatType, threat);
+            
+            hideContextMenu();
+        }
+        
+        function createThreatEffect(threatType, threat) {
+            // Random position on globe surface
+            const lat = (Math.random() - 0.5) * 180;
+            const lon = (Math.random() - 0.5) * 360;
+            const pos = latLonToCartesian(lat, lon, 5.3);
+            
+            // Create particle effect
+            const effect = new ParticleEffect(pos, threat.visual);
+            gameState.effects.push(effect);
+            
+            // Create threat marker
+            const geometry = new THREE.SphereGeometry(0.1, 16, 16);
+            const material = new THREE.MeshPhongMaterial({ 
+                color: threat.color,
+                emissive: threat.color,
+                emissiveIntensity: 0.6,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            const marker = new THREE.Mesh(geometry, material);
+            marker.position.set(pos.x, pos.y, pos.z);
+            marker.userData = { type: threatType, startTime: Date.now() };
+            
+            threatMarkers.push(marker);
+            scene.add(marker);
+            
+            // Remove marker after duration
+            setTimeout(() => {
+                scene.remove(marker);
+                const index = threatMarkers.indexOf(marker);
+                if (index > -1) threatMarkers.splice(index, 1);
+            }, threat.duration * 1000);
+        }
+        
+        // Context menu actions
+        function targetRegion(regionName, threatType) {
+            gameState.addNarrative(`🎯 ${threatType.replace('_', ' ')} targeted at ${regionName}`, 'TACTICAL');
+            deployThreat(threatType);
+        }
+        
+        function hackSatellite(constellation) {
+            gameState.addNarrative(`💻 ${constellation} constellation compromised`, 'CYBER');
+            gameState.applyEffects({ technology: -5, defense: -20 });
+            hideContextMenu();
+        }
+        
+        function destroySatellite(constellation) {
+            gameState.addNarrative(`💥 ${constellation} satellite destroyed`, 'WARFARE');
+            gameState.applyEffects({ technology: -10, defense: -30 });
+            hideContextMenu();
+        }
+        
+        function restoreSatellite(constellation) {
+            if (gameState.resources.credits >= 100) {
+                gameState.resources.credits -= 100;
+                gameState.addNarrative(`🔧 ${constellation} systems restored`, 'REPAIR');
+                gameState.applyEffects({ technology: +5, defense: +15 });
+            }
+            hideContextMenu();
+        }
+        
+        function upgradeSatellite(constellation) {
+            if (gameState.resources.credits >= 200) {
+                gameState.resources.credits -= 200;
+                gameState.addNarrative(`⬆️ ${constellation} upgraded`, 'TECH');
+                gameState.applyEffects({ technology: +10, defense: +25 });
+            }
+            hideContextMenu();
+        }
+        
+        function infiltrateLocation(name) {
+            gameState.addNarrative(`🕵️ Infiltration attempt at ${name}`, 'COVERT');
+            gameState.applyEffects({ psychology: -5, defense: -10 });
+            hideContextMenu();
+        }
+        
+        function attackLocation(name) {
+            gameState.addNarrative(`💥 Attack launched on ${name}`, 'WARFARE');
+            gameState.applyEffects({ psychology: -10, defense: -20, suffering: +15 });
+            hideContextMenu();
+        }
+        
+        function secureLocation(name) {
+            if (gameState.resources.credits >= 150) {
+                gameState.resources.credits -= 150;
+                gameState.addNarrative(`🛡️ ${name} security enhanced`, 'DEFENSE');
+                gameState.applyEffects({ defense: +20 });
+            }
+            hideContextMenu();
+        }
+        
+        function monitorLocation(name) {
+            if (gameState.resources.credits >= 50) {
+                gameState.resources.credits -= 50;
+                gameState.addNarrative(`👁️ Surveillance established at ${name}`, 'INTEL');
+                gameState.applyEffects({ research: +25 });
+            }
+            hideContextMenu();
+        }
+        
+        // Game controls
+        function setMode(mode) {
+            gameState.mode = mode;
+            document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(mode + 'Mode').classList.add('active');
+            gameState.addNarrative(`🎮 Mode: ${mode.toUpperCase()}`, 'MODE');
+        }
+        
+        function togglePause() {
+            gameState.paused = !gameState.paused;
+            document.getElementById('pauseBtn').textContent = gameState.paused ? '▶️ Play' : '⏸️ Pause';
+            gameState.addNarrative(gameState.paused ? '⏸️ Simulation paused' : '▶️ Simulation resumed', 'SYSTEM');
+        }
+        
+        function toggleSpeed() {
+            const speeds = [1, 2, 4, 0.5];
+            const currentIndex = speeds.indexOf(gameState.speed);
+            gameState.speed = speeds[(currentIndex + 1) % speeds.length];
+            document.getElementById('speedBtn').textContent = `⚡ Speed: ${gameState.speed}x`;
+            gameState.addNarrative(`⚡ Simulation speed: ${gameState.speed}x`, 'SYSTEM');
+        }
+        
+        function resetSimulation() {
+            // Clear all visual elements
+            threatMarkers.forEach(marker => scene.remove(marker));
+            threatMarkers = [];
+            
+            // Reset game state
+            gameState = new GameState();
+            
+            document.getElementById('emergencyAlert').classList.add('hidden');
+            document.getElementById('alertOverlay').classList.add('hidden');
+            
+            gameState.addNarrative('🔄 Global Crisis Simulator reset', 'SYSTEM');
+            gameState.addNarrative('🌍 All systems nominal', 'STATUS');
+        }
+        
+        function closeAlert() {
+            document.getElementById('emergencyAlert').classList.add('hidden');
+            document.getElementById('alertOverlay').classList.add('hidden');
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Initialize on load
+        window.addEventListener('load', initEarth);
+    </script>
+</body>
+</html>
