@@ -7,7 +7,7 @@ import { AlertTriangle, Power } from 'lucide-react';
 
 interface AudioSystem {
   context: AudioContext;
-  playAlert: (type: 'warning' | 'critical' | 'success') => void;
+  playAlert: (type: 'warning' | 'critical' | 'success', pan?: number) => void;
   playAmbient: () => void;
   stopAmbient: () => void;
 }
@@ -21,10 +21,13 @@ class WarRoomAudio {
     this.context = new AudioContext();
     this.ambientGain = this.context.createGain();
     this.ambientGain.connect(this.context.destination);
-    this.ambientGain.gain.value = 0.1;
+    this.ambientGain.gain.value = 0.1; // Reduced ambient volume a bit
   }
   
-  playAlert(type: 'warning' | 'critical' | 'success') {
+  playAlert(type: 'warning' | 'critical' | 'success', pan: number = 0) {
+    // Ensure pan value is within -1 to 1 range
+    const effectivePan = Math.max(-1, Math.min(1, pan));
+
     const frequencies = {
       warning: [800, 1000],
       critical: [400, 600, 800],
@@ -32,21 +35,26 @@ class WarRoomAudio {
     };
     
     const freqs = frequencies[type];
+    const baseVolume = type === 'critical' ? 0.12 : 0.08; // Slightly louder critical alerts
+
     freqs.forEach((freq, i) => {
       setTimeout(() => {
         const osc = this.context.createOscillator();
         const gain = this.context.createGain();
-        
+        const panner = this.context.createStereoPanner();
+
         osc.connect(gain);
-        gain.connect(this.context.destination);
+        gain.connect(panner);
+        panner.connect(this.context.destination);
         
+        panner.pan.setValueAtTime(effectivePan, this.context.currentTime);
         osc.frequency.setValueAtTime(freq, this.context.currentTime);
-        gain.gain.setValueAtTime(0.1, this.context.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, this.context.currentTime + 0.3);
+        gain.gain.setValueAtTime(baseVolume, this.context.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, this.context.currentTime + 0.35); // Slightly longer tail
         
         osc.start();
-        osc.stop(this.context.currentTime + 0.3);
-      }, i * 100);
+        osc.stop(this.context.currentTime + 0.35);
+      }, i * (type === 'critical' ? 80 : 100)); // Faster sequence for critical
     });
   }
   
@@ -169,19 +177,43 @@ export default function GlobalCrisisSimulator() {
         if (earth3DRef.current) {
           earth3DRef.current.updateRegionData(newState.regions);
           
-          // Add new event markers
+          // Add new event markers and play sounds
           newState.activeEvents.forEach(event => {
-            if (event.timeLeft === event.duration) {
+            if (event.timeLeft === event.duration) { // New event
               earth3DRef.current?.addEventMarker(event);
+
+              // Calculate pan for new event sound
+              let pan = 0;
+              if (earth3DRef.current) {
+                // Convert event x,y (normalized lat/lon-like) to a 3D point on sphere surface
+                // Assuming event.x, event.y are similar to region.x, region.y used in GameEngine for positioning
+                // These are abstract coordinates; let's assume they map to a sphere of radius ~2.1 like event markers
+                const eventWorldPos = new THREE.Vector3().setFromSphericalCoords(
+                  2.1, // Approximate radius of event markers
+                  Math.PI / 2 - event.y, // Convert y to polar angle (phi)
+                  event.x // Convert x to azimuthal angle (theta)
+                );
+                const screenPos = earth3DRef.current.projectToScreen(eventWorldPos);
+                if (screenPos && screenPos.z < 1) { // Check if in front of camera
+                  pan = screenPos.x; // Normalized x is -1 to 1
+                }
+              }
+              // Determine alert type (e.g., based on event.type or severity)
+              // For now, all new random/spawned events are 'warning'
+              // User-triggered events will have their own logic in handleContextMenuAction
+              const definition = gameEngineRef.current?.getThreatDefinition(event.type);
+              const isPositive = definition && (definition.effects.health && definition.effects.health > 0 || definition.effects.environment && definition.effects.environment > 0);
+
+              audioRef.current?.playAlert(isPositive ? 'success' : 'warning', pan);
             }
           });
         }
         
-        // Play audio alerts for new events
-        if (newState.activeEvents.length > lastEventCount) {
-          audioRef.current?.playAlert('warning');
+        // Update lastEventCount after processing all events
+        if (newState.activeEvents.length !== lastEventCount) {
+             setLastEventCount(newState.activeEvents.length);
         }
-        setLastEventCount(newState.activeEvents.length);
+
       }
       
       if (gameState.running) {
@@ -226,51 +258,75 @@ export default function GlobalCrisisSimulator() {
   }, [contextMenu.visible]);
   
   const handleContextMenuAction = useCallback((action: string, target?: any) => {
-    if (!gameEngineRef.current || !gameState) return;
+    if (!gameEngineRef.current || !gameState || !earth3DRef.current) return;
     
     let newState = { ...gameState };
+    let pan = 0;
+    let alertType: 'warning' | 'critical' | 'success' = 'warning'; // Default alert type
+
+    // Calculate pan based on the target of the action
+    if (target) {
+        let targetPosition3D: THREE.Vector3 | null = null;
+        if (target.type && target.region) { // Deploy action, target is region
+            const region = target.region as WorldRegion;
+            // Convert region x,y to 3D world coordinates (approximate)
+            targetPosition3D = new THREE.Vector3().setFromSphericalCoords(2.0, Math.PI/2 - region.y, region.x);
+        } else if (target.mesh && target.mesh.position) { // Satellite action, target has a mesh
+            targetPosition3D = target.mesh.position.clone();
+        }
+        // TODO: Add case for event target if needed for 'counter' or 'amplify'
+
+        if (targetPosition3D) {
+            const screenPos = earth3DRef.current.projectToScreen(targetPosition3D);
+            if (screenPos && screenPos.z < 1) { // Check if in front of camera
+                pan = screenPos.x;
+            }
+        }
+    }
     
     switch (action) {
       case 'deploy':
         if (target?.type && target?.region) {
           newState = gameEngineRef.current.triggerEvent(newState, target.type, target.region.id);
-          audioRef.current?.playAlert(target.type.includes('HEAL') ? 'success' : 'critical');
+          const definition = gameEngineRef.current.getThreatDefinition(target.type as EventType);
+          alertType = definition && (definition.effects.health && definition.effects.health > 0 || definition.effects.environment && definition.effects.environment > 0) ? 'success' : 'critical';
+          audioRef.current?.playAlert(alertType, pan);
         }
         break;
         
       case 'hack':
         if (target && earth3DRef.current) {
           earth3DRef.current.compromiseSatellite(target.id);
-          audioRef.current?.playAlert('warning');
+          audioRef.current?.playAlert('warning', pan);
         }
         break;
         
       case 'destroy':
         if (target && earth3DRef.current) {
           earth3DRef.current.destroySatellite(target.id);
-          audioRef.current?.playAlert('critical');
+          audioRef.current?.playAlert('critical', pan);
         }
         break;
         
       case 'restore':
         if (target && earth3DRef.current) {
-          // Restore satellite functionality
-          audioRef.current?.playAlert('success');
+          // Placeholder: earth3DRef.current.restoreSatellite(target.id);
+          audioRef.current?.playAlert('success', pan);
         }
         break;
         
       case 'focus':
-        // Focus camera on region
+        // Focus camera on region - no sound or specific sound?
         break;
         
       case 'counter':
         // Deploy countermeasures
-        audioRef.current?.playAlert('success');
+        audioRef.current?.playAlert('success', pan);
         break;
         
       case 'amplify':
         // Amplify event effect
-        audioRef.current?.playAlert('critical');
+        audioRef.current?.playAlert('critical', pan);
         break;
     }
     

@@ -146,35 +146,47 @@ export class GameEngine {
   
   private applyEventToRegion(region: WorldRegion, event: RegionEvent) {
     const distance = Math.sqrt((region.x - event.x) ** 2 + (region.y - event.y) ** 2);
-    const impact = Math.max(0, 1 - distance / 0.5) * event.severity;
+    // Impact falloff: full impact within 0.1 distance units, then linear falloff up to 0.5 distance units.
+    // The previous calculation `1 - distance / 0.5` meant that at distance 0, impact was 1, but at distance 0.25 (halfway), impact was 0.5.
+    // A more common falloff model might be a sharper drop. Let's make it so that impact is full if very close.
+    // Max distance for any effect will be `maxEffectRadius`.
+    const maxEffectRadius = 0.5; // Region "radius" for effect spread.
+    let normalizedDistance = distance / maxEffectRadius; // distance normalized to [0, N] where 1 is edge of radius.
     
-    switch (event.type) {
-      case EventType.NUCLEAR_STRIKE:
-        region.health -= impact * 50;
-        region.environment -= impact * 40;
-        region.population *= (1 - impact * 0.3);
-        break;
-      case EventType.BIOLOGICAL_WEAPON:
-        region.health -= impact * 40;
-        region.population *= (1 - impact * 0.2);
-        break;
-      case EventType.CYBER_ATTACK:
-        region.stability -= impact * 30;
-        break;
-      case EventType.CLIMATE_DISASTER:
-        region.environment -= impact * 35;
-        region.population *= (1 - impact * 0.1);
-        break;
-      case EventType.ROGUE_AI:
-        region.stability -= impact * 45;
-        region.health -= impact * 25;
-        break;
-      case EventType.HEALING:
-        region.health = Math.min(100, region.health + impact * 20);
-        break;
-      case EventType.ENVIRONMENTAL_RESTORATION:
-        region.environment = Math.min(100, region.environment + impact * 25);
-        break;
+    // Calculate base impact factor based on distance and event severity
+    // Example: Full impact if distance is 0, linearly decreases to 0 at maxEffectRadius.
+    const impactFactor = Math.max(0, (1 - normalizedDistance) * event.severity);
+
+    if (impactFactor <= 0) { // No impact if too far or severity is zero
+      return;
+    }
+
+    const definition = THREAT_DEFINITIONS[event.type];
+    if (!definition) {
+      console.warn(`No definition found for event type: ${event.type}`);
+      return;
+    }
+
+    const effects = definition.effects;
+
+    if (effects.health) {
+      region.health += effects.health * impactFactor;
+    }
+    if (effects.environment) {
+      region.environment += effects.environment * impactFactor;
+    }
+    if (effects.stability) {
+      region.stability += effects.stability * impactFactor;
+    }
+    if (effects.population) { // Absolute population change
+      region.population += effects.population * impactFactor;
+    }
+    if (effects.populationMultiplier) { // Multiplicative change
+      // Apply multiplier less harshly at distance:
+      // Full effect (e.g., 0.7x) at point blank, no effect (1.0x) at max distance.
+      // Lerp between 1 and the multiplier based on impactFactor.
+      const effectiveMultiplier = 1 + (effects.populationMultiplier - 1) * impactFactor;
+      region.population *= effectiveMultiplier;
     }
     
     region.health = Math.max(0, Math.min(100, region.health));
@@ -198,15 +210,22 @@ export class GameEngine {
       const randomType = eventTypes[Math.floor(Math.random() * eventTypes.length)];
       const region = state.regions[Math.floor(Math.random() * state.regions.length)];
       
+      const definition = THREAT_DEFINITIONS[randomType];
+      if (!definition) {
+        // Should not happen if all EventTypes are in THREAT_DEFINITIONS
+        console.warn(`No definition for random event type: ${randomType}`);
+        return;
+      }
+
       const event: RegionEvent = {
         id: Math.random().toString(36),
         type: randomType,
-        severity: Math.random() * 0.8 + 0.2,
-        duration: 5000 + Math.random() * 15000,
-        timeLeft: 5000 + Math.random() * 15000,
-        x: region.x + (Math.random() - 0.5) * 0.2,
+        severity: Math.random() * 0.8 + 0.2, // Keep severity random for spawned events
+        duration: definition.duration,
+        timeLeft: definition.duration,
+        x: region.x + (Math.random() - 0.5) * 0.2, // Position within the region
         y: region.y + (Math.random() - 0.5) * 0.2,
-        spread: Math.random() * 0.3,
+        spread: Math.random() * 0.3, // Keep spread random
         active: true
       };
       
@@ -239,15 +258,21 @@ export class GameEngine {
     
     if (!region) return state;
     
+    const definition = THREAT_DEFINITIONS[eventType];
+    if (!definition) {
+      console.warn(`No definition found for event type: ${eventType} in triggerEvent`);
+      return state; // or throw error
+    }
+
     const event: RegionEvent = {
       id: Math.random().toString(36),
       type: eventType,
-      severity: 0.8 + Math.random() * 0.2,
-      duration: 8000,
-      timeLeft: 8000,
-      x: region.x + (Math.random() - 0.5) * 0.1,
+      severity: 0.8 + Math.random() * 0.2, // Keep severity somewhat random for now
+      duration: definition.duration,
+      timeLeft: definition.duration,
+      x: region.x + (Math.random() - 0.5) * 0.1, // Slight random offset from region center
       y: region.y + (Math.random() - 0.5) * 0.1,
-      spread: Math.random() * 0.2,
+      spread: Math.random() * 0.2, // Keep spread random for now
       active: true
     };
     
@@ -256,5 +281,9 @@ export class GameEngine {
     region.events.push(event);
     
     return newState;
+  }
+
+  public getThreatDefinition(eventType: EventType): ThreatDefinition | undefined {
+    return THREAT_DEFINITIONS[eventType];
   }
 }
