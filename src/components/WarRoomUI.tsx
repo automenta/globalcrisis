@@ -15,7 +15,15 @@ import {
   Eye,
   Sword,
   Heart,
-  Leaf
+  Leaf,
+  DollarSign, // For economic prosperity
+  Cpu, // For technology level
+  Wheat, // For food supply
+  Factory, // For infrastructure
+  Gem, // For rare earth elements
+  Users, // For Factions
+  Flag, // For Faction HQ / Influence
+  BookOpen // For Ideology
 } from 'lucide-react';
 
 interface ContextMenuProps {
@@ -50,11 +58,16 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     <div className=\"space-y-2\">
       <div className=\"border-b border-red-800 pb-2 mb-2\">
         <h3 className=\"font-bold text-red-400 military-font\">{region?.name}</h3>
-        <div className=\"grid grid-cols-2 gap-2 text-xs mt-1\">
+        <div className=\"grid grid-cols-3 gap-x-2 gap-y-1 text-xs mt-1\">
           <div>Pop: {region?.population ? (region.population / 1000000).toFixed(0) + 'M' : 'N/A'}</div>
           <div>Health: {region?.health?.toFixed(0)}%</div>
           <div>Env: {region?.environment?.toFixed(0)}%</div>
           <div>Stab: {region?.stability?.toFixed(0)}%</div>
+          <div className=\"col-span-3 my-1\"><Separator variant=\"dashed\" className=\"border-red-700\"/></div>
+          <div className=\"flex items-center\"><Wheat className=\"w-3 h-3 mr-1 text-lime-400\"/>Food: {region?.foodSupply?.toFixed(0)}%</div>
+          <div className=\"flex items-center\"><Cpu className=\"w-3 h-3 mr-1 text-orange-400\"/>Tech: {region?.technologyLevel?.toFixed(0)}%</div>
+          <div className=\"flex items-center\"><Factory className=\"w-3 h-3 mr-1 text-cyan-400\"/>Infra: {region?.infrastructureQuality?.toFixed(0)}%</div>
+          <div className=\"flex items-center col-span-2\"><Gem className=\"w-3 h-3 mr-1 text-pink-400\"/>Rare Earths: {region?.rareEarthElements?.toFixed(0)}%</div>
         </div>
       </div>
       
@@ -117,6 +130,36 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         >
           <Leaf className=\"w-3 h-3 mr-1\" />
           Environmental Aid
+        </Button>
+
+        <Separator className=\"my-2\" />
+        <div className=\"text-xs text-yellow-300 font-semibold mb-1\">ECONOMIC ACTIONS</div>
+        <Button
+          size=\"sm\"
+          variant=\"outline\"
+          className=\"w-full justify-start text-xs border-yellow-700 hover:bg-yellow-700/30\"
+          onClick={() => handleAction('deploy', { type: EventType.TRADE_WAR, region })}
+        >
+          <DollarSign className=\"w-3 h-3 mr-1 text-yellow-400\" />
+          Initiate Trade War
+        </Button>
+        <Button
+          size=\"sm\"
+          variant=\"outline\"
+          className=\"w-full justify-start text-xs border-yellow-700 hover:bg-yellow-700/30\"
+          onClick={() => handleAction('deploy', { type: EventType.RESOURCE_DISCOVERY, region })}
+        >
+          <Gem className=\"w-3 h-3 mr-1 text-yellow-400\" />
+          Explore Resources
+        </Button>
+        <Button
+          size=\"sm\"
+          variant=\"outline\"
+          className=\"w-full justify-start text-xs border-green-700 hover:bg-green-700/30\"
+          onClick={() => handleAction('deploy', { type: EventType.TECHNOLOGICAL_LEAP, region })}
+        >
+          <Cpu className=\"w-3 h-3 mr-1 text-green-400\" />
+          Invest in Technology
         </Button>
         
         <Separator className=\"my-2\" />
@@ -266,6 +309,7 @@ interface TacticalOverlayProps {
   onSpeedChange: (speed: number) => void;
   onTogglePlay: () => void;
   onReset: () => void;
+  factions: any[]; // Added factions to props
 }
 
 export const TacticalOverlay: React.FC<TacticalOverlayProps> = ({
@@ -273,18 +317,20 @@ export const TacticalOverlay: React.FC<TacticalOverlayProps> = ({
   onModeChange,
   onSpeedChange,
   onTogglePlay,
-  onReset
+  onReset,
+  factions // Consumed factions
 }) => {
   return (
     <>
       {/* Top HUD */}
-      <div className=\"absolute top-4 left-4 right-4 z-40 pointer-events-none\">
-        <div className=\"flex justify-between items-start\">
-          <div className=\"bg-black/80 border border-red-900 rounded-lg p-4 backdrop-blur-sm pointer-events-auto\">
-            <h1 className=\"text-xl font-bold text-red-400 military-font mb-2\">
-              GLOBAL COMMAND CENTER
+      <div className=\"absolute top-4 left-4 right-4 z-40 pointer-events-none flex flex-col space-y-4\">
+        <div className=\"flex justify-between items-start space-x-4\">
+          {/* Global Command Center */}
+          <div className=\"bg-black/80 border border-red-900 rounded-lg p-4 backdrop-blur-sm pointer-events-auto flex-grow\">
+            <h1 className=\"text-lg font-bold text-red-400 military-font mb-2 flex items-center\">
+              <Target className=\"w-5 h-5 mr-2\"/>GLOBAL COMMAND CENTER
             </h1>
-            <div className=\"grid grid-cols-2 gap-4 text-sm\">
+            <div className=\"grid grid-cols-3 gap-x-6 gap-y-3 text-sm\">
               <div>
                 <div className=\"text-blue-400 font-semibold\">Population</div>
                 <div className=\"text-white font-mono\">{(gameState.globalPopulation / 1000000000).toFixed(2)}B</div>
@@ -298,16 +344,42 @@ export const TacticalOverlay: React.FC<TacticalOverlayProps> = ({
                 <div className=\"text-white font-mono\">{gameState.globalEnvironment?.toFixed(1)}%</div>
               </div>
               <div>
+                <div className=\"text-purple-400 font-semibold\">Stability</div>
+                <div className=\"text-white font-mono\">{gameState.globalStability?.toFixed(1)}%</div>
+              </div>
+              <div>
                 <div className=\"text-red-400 font-semibold\">Suffering</div>
                 <div className=\"text-white font-mono\">{gameState.globalSuffering?.toFixed(1)}%</div>
+              </div>
+              <div className=\"col-span-3 my-1\"><Separator /></div>
+              <div>
+                <div className=\"text-teal-400 font-semibold flex items-center\"><DollarSign className=\"w-3 h-3 mr-1\"/>Prosperity</div>
+                <div className=\"text-white font-mono\">{gameState.globalEconomicProsperity?.toFixed(1)}%</div>
+              </div>
+              <div>
+                <div className=\"text-orange-400 font-semibold flex items-center\"><Cpu className=\"w-3 h-3 mr-1\"/>Tech Level</div>
+                <div className=\"text-white font-mono\">{gameState.globalTechnologyLevel?.toFixed(1)}%</div>
+              </div>
+              <div>
+                <div className=\"text-lime-400 font-semibold flex items-center\"><Wheat className=\"w-3 h-3 mr-1\"/>Food Supply</div>
+                <div className=\"text-white font-mono\">{gameState.globalFoodSupply?.toFixed(1)}%</div>
+              </div>
+              <div>
+                <div className=\"text-cyan-400 font-semibold flex items-center\"><Factory className=\"w-3 h-3 mr-1\"/>Infrastructure</div>
+                <div className=\"text-white font-mono\">{gameState.globalInfrastructureQuality?.toFixed(1)}%</div>
+              </div>
+              <div>
+                <div className=\"text-pink-400 font-semibold flex items-center\"><Gem className=\"w-3 h-3 mr-1\"/>Rare Earths</div>
+                <div className=\"text-white font-mono\">{gameState.globalRareEarthElements?.toFixed(1)}%</div>
               </div>
             </div>
           </div>
           
-          <div className=\"bg-black/80 border border-red-900 rounded-lg p-4 backdrop-blur-sm pointer-events-auto\">
+          {/* Orbital Status Panel */}
+          <div className=\"bg-black/80 border border-red-900 rounded-lg p-4 backdrop-blur-sm pointer-events-auto w-72 flex-shrink-0\">
             <div className=\"flex items-center gap-2 mb-2\">
               <SatelliteIcon className=\"w-4 h-4 text-blue-400\" />
-              <span className=\"text-sm font-semibold text-blue-400\">ORBITAL STATUS</span>
+              <span className=\"text-sm font-semibold text-blue-400 military-font\">ORBITAL STATUS</span>
             </div>
             <div className=\"text-xs space-y-1\">
               <div className=\"flex justify-between\">
@@ -325,6 +397,38 @@ export const TacticalOverlay: React.FC<TacticalOverlayProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Factions Panel */}
+        {factions && factions.length > 0 && (
+          <div className=\"bg-black/80 border border-purple-700 rounded-lg p-4 backdrop-blur-sm pointer-events-auto\">
+            <h2 className=\"text-lg font-bold text-purple-400 military-font mb-3 flex items-center\">
+              <Users className=\"w-5 h-5 mr-2\" />
+              GLOBAL FACTIONS OVERVIEW
+            </h2>
+            <div className=\"grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-xs max-h-48 overflow-y-auto pr-2\">
+              {factions.map((faction: any) => (
+                <div key={faction.id} className=\"bg-purple-900/30 border border-purple-800 p-2 rounded\">
+                  <div className=\"font-semibold text-purple-300 truncate\" title={faction.name}>
+                    {faction.name}
+                  </div>
+                  <div className=\"text-gray-400 flex items-center\">
+                    <BookOpen className=\"w-3 h-3 mr-1 text-purple-500\" /> {faction.ideology}
+                  </div>
+                  <div className=\"text-gray-400\">
+                    Power: <span className=\"font-mono text-purple-400\">{faction.powerLevel?.toFixed(0)}%</span>
+                  </div>
+                  <div className=\"text-gray-400 flex items-center\">
+                    <Flag className=\"w-3 h-3 mr-1 text-purple-500\" /> HQ: {faction.headquartersRegion.toUpperCase()}
+                  </div>
+                  {/* Optional: Display top 2 relations */}
+                  {/* <div className=\"text-xxs text-gray-500 mt-1\">
+                    Relations: {Array.from(faction.relations.entries()).sort(([,a],[,b]) => b-a).slice(0,1).map(([id, val]) => `${id.substring(0,3)}:${val}`).join(', ')}
+                  </div> */}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Bottom Control Panel */}

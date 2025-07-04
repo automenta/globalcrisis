@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { GameState, WorldRegion, RegionEvent, EventType } from '../engine/GameEngine';
+import { GameState, WorldRegion, RegionEvent, EventType, Faction, Ideology } from '../engine/GameEngine'; // Added Faction, Ideology
+import SimplexNoise from 'simplex-noise';
 
 export interface Satellite {
   id: string;
@@ -36,6 +37,8 @@ export class Earth3D {
   private satellites: Satellite[] = [];
   private regionMarkers: THREE.Mesh[] = [];
   private eventMarkers: THREE.Mesh[] = [];
+  private factionInfluenceOverlay: THREE.Mesh | null = null; // For faction visualization
+  private factionHQLayer: THREE.Group = new THREE.Group(); // Group for HQ markers
   private raycaster = new THREE.Raycaster();
   private mouse = new THREE.Vector2();
   private controls: any;
@@ -61,11 +64,35 @@ export class Earth3D {
     this.createAtmosphere();
     this.createClouds();
     this.createSatellites();
+    this.createFactionVisualLayers(); // Initialize faction layers
     this.setupControls();
     this.setupEventListeners(container);
     this.animate();
   }
   
+  private createFactionVisualLayers() {
+    // Faction Influence Overlay (transparent sphere)
+    const overlayGeometry = new THREE.SphereGeometry(2.01, 32, 32); // Slightly above earth surface
+    // The material will be a canvas texture that gets updated
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024; // Texture resolution for influence map
+    canvas.height = 512;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+
+    const overlayMaterial = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      opacity: 0.3, // Adjust for desired visibility
+      side: THREE.DoubleSide, // Render both sides if needed
+    });
+    this.factionInfluenceOverlay = new THREE.Mesh(overlayGeometry, overlayMaterial);
+    this.scene.add(this.factionInfluenceOverlay);
+
+    // Add faction HQ layer to the scene
+    this.scene.add(this.factionHQLayer);
+  }
+
   private setupRenderer(container: HTMLElement) {
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -160,41 +187,97 @@ export class Earth3D {
   }
   
   private createEarthTexture(ctx: CanvasRenderingContext2D, width: number, height: number) {
-    // Create a procedural earth-like texture
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
-    
-    for (let i = 0; i < width; i++) {
-      for (let j = 0; j < height; j++) {
+    const simplex = new SimplexNoise();
+
+    // Helper function to map noise value to color
+    const getColor = (elevation: number, moisture: number) => {
+      if (elevation < -0.1) { // Deep Ocean
+        return [10, 20, 80 + elevation * 200]; // Darker blue
+      } else if (elevation < 0.05) { // Shallow Ocean / Coast
+        return [20, 80, 150 + elevation * 400]; // Lighter blue
+      } else if (elevation < 0.15) { // Beach / Lowland
+        if (moisture > 0.3) return [139, 178, 102]; // Lush Lowland Green
+        return [210, 180, 140]; // Tan sand
+      } else if (elevation < 0.4) { // Plains / Forests
+        if (moisture > 0.5) return [34, 139, 34]; // Forest Green
+        if (moisture > 0.1) return [124, 252, 0]; // Grassland Green
+        return [188, 143, 143]; // Dry plains / light brown
+      } else if (elevation < 0.6) { // Hills / Light Mountains
+        if (moisture > 0.3) return [85, 107, 47]; // Dark Olive Green (Forested Hills)
+        return [139, 119, 101]; // Brownish grey rock
+      } else if (elevation < 0.8) { // Mountains
+        return [100, 100, 100]; // Grey rock
+      } else { // Snowy Peaks
+        return [220, 220, 220]; // White snow
+      }
+    };
+
+    for (let j = 0; j < height; j++) { // y, latitude
+      for (let i = 0; i < width; i++) { // x, longitude
         const index = (j * width + i) * 4;
+
+        // Convert pixel coordinates to 3D coordinates on a sphere for noise input
+        // This gives better results than direct lat/lon for simplex noise on a sphere
+        const u = i / width;
+        const v = j / height;
+        const lon = u * 2 * Math.PI;
+        const lat = (v - 0.5) * Math.PI;
+
+        // Sphere mapping for noise (prevents pinching at poles)
+        const x = Math.cos(lat) * Math.cos(lon);
+        const y = Math.cos(lat) * Math.sin(lon);
+        const z = Math.sin(lat);
         
-        // Convert to lat/lon
-        const lon = (i / width) * 2 * Math.PI - Math.PI;
-        const lat = (j / height) * Math.PI - Math.PI / 2;
-        
-        // Noise for terrain
-        const noise1 = Math.sin(lat * 8) * Math.cos(lon * 6);
-        const noise2 = Math.sin(lat * 16) * Math.cos(lon * 12) * 0.5;
-        const elevation = noise1 + noise2;
-        
-        if (elevation > 0.2) {
-          // Land - browns and greens
-          data[index] = 34 + Math.random() * 40;     // R
-          data[index + 1] = 80 + Math.random() * 60; // G
-          data[index + 2] = 20 + Math.random() * 30; // B
-        } else {
-          // Ocean - blues
-          data[index] = 10 + Math.random() * 20;     // R
-          data[index + 1] = 50 + Math.random() * 40; // G
-          data[index + 2] = 120 + Math.random() * 80; // B
+        // Multiple octaves of Simplex noise for elevation
+        let elevation = 0;
+        let frequency = 2.5; // Base frequency for continents
+        let amplitude = 1;
+        let lacunarity = 2.0; // How much detail is added with each octave
+        let persistence = 0.5; // How much amplitude is reduced for each octave
+
+        for (let o = 0; o < 6; o++) { // 6 octaves of noise
+          elevation += simplex.noise3D(x * frequency, y * frequency, z * frequency) * amplitude;
+          frequency *= lacunarity;
+          amplitude *= persistence;
         }
-        data[index + 3] = 255; // A
+        // Normalize elevation to roughly -1 to 1, then scale for desired features
+        elevation = elevation / 1.8; // Adjust divisor based on observed noise range
+
+        // Moisture map (another layer of noise)
+        let moisture = 0;
+        frequency = 1.5;
+        amplitude = 1;
+        for (let o = 0; o < 4; o++) {
+            moisture += simplex.noise3D(x * frequency + 100, y * frequency + 100, z * frequency + 100) * amplitude;
+            frequency *= lacunarity;
+            amplitude *= persistence;
+        }
+        moisture = (moisture / 1.5 + 1) / 2; // Normalize to 0-1
+
+        // Temperature based on latitude (simple gradient)
+        const temperature = 1 - Math.abs(j - height / 2) / (height / 2); // 1 at equator, 0 at poles
+        
+        // Adjust elevation for polar ice caps
+        if (temperature < 0.15 && elevation > 0) { // Cold regions with land
+           elevation = Math.max(elevation, 0.75); // Force snowy peaks for ice caps
+        }
+        if (temperature < 0.1 && elevation <= 0.05 ) { // Cold regions with ocean
+            elevation = 0.75; // Ice sheets over ocean
+        }
+
+
+        const [r, g, b] = getColor(elevation, moisture);
+        data[index] = r;
+        data[index + 1] = g;
+        data[index + 2] = b;
+        data[index + 3] = 255; // Alpha
       }
     }
-    
     ctx.putImageData(imageData, 0, 0);
   }
-  
+
   private createNormalMap(ctx: CanvasRenderingContext2D, width: number, height: number) {
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
@@ -247,27 +330,44 @@ export class Earth3D {
   private createCloudTexture(ctx: CanvasRenderingContext2D, width: number, height: number) {
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
-    
-    for (let i = 0; i < width; i++) {
-      for (let j = 0; j < height; j++) {
+    const simplex = new SimplexNoise(); // Re-initialize for clouds or pass instance if preferred
+
+    for (let j = 0; j < height; j++) { // y, latitude
+      for (let i = 0; i < width; i++) { // x, longitude
         const index = (j * width + i) * 4;
+
+        const u = i / width;
+        const v = j / height;
+        const lon = u * 2 * Math.PI;
+        const lat = (v - 0.5) * Math.PI;
+
+        // Sphere mapping for noise
+        const x = Math.cos(lat) * Math.cos(lon);
+        const y = Math.cos(lat) * Math.sin(lon);
+        const z = Math.sin(lat);
+
+        // Simplex noise for cloud patterns
+        let cloudNoise = 0;
+        let frequency = 3.0; // Different frequency for clouds
+        let amplitude = 1;
+        for (let o = 0; o < 5; o++) { // Fewer octaves for softer clouds
+          cloudNoise += simplex.noise3D(x * frequency, y * frequency, z * frequency + 50) * amplitude; // Offset z for different pattern
+          frequency *= 2.0;
+          amplitude *= 0.5;
+        }
+        cloudNoise = (cloudNoise / 1.5 + 1) / 2; // Normalize to 0-1
+
+        const cloudValue = cloudNoise > 0.6 ? (cloudNoise - 0.6) / 0.4 * 200 + 55 : 0; // Threshold and scale for opacity
         
-        const lon = (i / width) * 2 * Math.PI;
-        const lat = (j / height) * Math.PI;
-        
-        const noise = Math.sin(lat * 12) * Math.cos(lon * 8) * Math.sin(lon * 4);
-        const cloud = noise > 0.3 ? 255 : 0;
-        
-        data[index] = cloud;     // R
-        data[index + 1] = cloud; // G
-        data[index + 2] = cloud; // B
-        data[index + 3] = cloud; // A
+        data[index] = 255; // R - white clouds
+        data[index + 1] = 255; // G
+        data[index + 2] = 255; // B
+        data[index + 3] = Math.max(0, Math.min(255, cloudValue)); // Alpha - cloud density
       }
     }
-    
     ctx.putImageData(imageData, 0, 0);
   }
-  
+
   private createSatellites() {
     const satelliteTypes = [
       { type: 'military', count: 8, color: 0xff0000, radius: 3.5 },
@@ -415,6 +515,12 @@ export class Earth3D {
     this.earth.rotation.y += 0.001;
     this.atmosphere.rotation.y += 0.001;
     this.clouds.rotation.y += 0.0012;
+    if (this.factionInfluenceOverlay) {
+      this.factionInfluenceOverlay.rotation.copy(this.earth.rotation);
+    }
+    if (this.factionHQLayer) {
+      this.factionHQLayer.rotation.copy(this.earth.rotation);
+    }
     
     // Update satellite positions
     this.satellites.forEach(satellite => {
@@ -443,8 +549,102 @@ export class Earth3D {
   
   public updateRegionData(regions: WorldRegion[]) {
     // Update region visualization based on game state
-    regions.forEach(region => {
-      // Add visual indicators for region health/status
+    // This could be expanded to show region-specific data markers if needed
+  }
+
+  public updateFactionData(factions: Faction[], regions: WorldRegion[]) {
+    if (!this.factionInfluenceOverlay) return;
+
+    const material = this.factionInfluenceOverlay.material as THREE.MeshBasicMaterial;
+    const canvas = material.map!.image as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear previous drawing
+
+    const imageData = ctx.createImageData(canvas.width, canvas.height);
+    const data = imageData.data;
+
+    const factionColors: Record<string, [number, number, number]> = {};
+    factions.forEach((faction, index) => {
+      // Generate a unique color for each faction (can be improved)
+      factionColors[faction.id] = [
+        (parseInt(faction.id.slice(-2), 16) * 5) % 255,
+        (faction.ideology.length * 30 + index * 40) % 255,
+        (faction.powerLevel * 2) % 255
+      ];
+    });
+
+    // Blend influences per pixel
+    for (let i = 0; i < canvas.width; i++) { // u (longitude)
+      for (let j = 0; j < canvas.height; j++) { // v (latitude)
+        const lon = (i / canvas.width) * 2 * Math.PI - Math.PI;
+        const lat = (j / canvas.height) * Math.PI - Math.PI / 2;
+
+        let rSum = 0, gSum = 0, bSum = 0, totalInfluenceAtPixel = 0;
+
+        regions.forEach(region => {
+          // Determine if pixel is within this region (simplified, needs better mapping)
+          // This is a very rough approximation. A proper UV to region mapping or SDF would be better.
+          const regionLon = region.x * Math.PI; // Assuming x,y are normalized lon/lat multipliers
+          const regionLat = region.y * (Math.PI / 2);
+          const dist = Math.sqrt(Math.pow(lon - regionLon, 2) + Math.pow(lat - regionLat, 2));
+
+          if (dist < 0.5) { // Pixel is "close" to region center
+             factions.forEach(faction => {
+              const influence = faction.influence.get(region.id) || 0;
+              if (influence > 0) {
+                const [r, g, b] = factionColors[faction.id];
+                const weight = influence / 100;
+                rSum += r * weight;
+                gSum += g * weight;
+                bSum += b * weight;
+                totalInfluenceAtPixel += weight;
+              }
+            });
+          }
+        });
+
+        const pixelIndex = (j * canvas.width + i) * 4;
+        if (totalInfluenceAtPixel > 0) {
+          data[pixelIndex] = rSum / totalInfluenceAtPixel;
+          data[pixelIndex + 1] = gSum / totalInfluenceAtPixel;
+          data[pixelIndex + 2] = bSum / totalInfluenceAtPixel;
+          data[pixelIndex + 3] = Math.min(255, totalInfluenceAtPixel * 100 + 50); // Alpha based on total influence
+        } else {
+          data[pixelIndex + 3] = 0; // Transparent if no influence
+        }
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+    material.map!.needsUpdate = true;
+
+    // Update HQ Markers
+    this.factionHQLayer.children.forEach(child => child.removeFromParent()); // Clear old markers
+    this.factionHQLayer.clear();
+
+    factions.forEach(faction => {
+      const hqRegion = regions.find(r => r.id === faction.headquartersRegion);
+      if (hqRegion) {
+        const color = new THREE.Color().fromArray(factionColors[faction.id].map(c => c/255));
+        const hqMarkerGeo = new THREE.ConeGeometry(0.05, 0.15, 8); // Cone for HQ
+        const hqMarkerMat = new THREE.MeshBasicMaterial({ color });
+        const hqMarker = new THREE.Mesh(hqMarkerGeo, hqMarkerMat);
+
+        const spherical = new THREE.Spherical().setFromCartesianCoords(
+          hqRegion.x * 2, // This x,y to 3D needs proper conversion based on how regions are defined
+          hqRegion.y * 2,
+          Math.sqrt(4 - (hqRegion.x*2)**2 - (hqRegion.y*2)**2) // Assuming x,y are on a sphere of radius 2
+        );
+        // A better way: convert region's representative lat/lon to Cartesian for sphere of radius 2.05
+        const cartesianPos = new THREE.Vector3().setFromSphericalCoords(
+            2.05, // radius slightly above Earth surface
+            Math.PI / 2 - (hqRegion.y * Math.PI / 2), // Convert normalized Y to latitude (phi)
+            hqRegion.x * Math.PI // Convert normalized X to longitude (theta)
+        );
+        hqMarker.position.copy(cartesianPos);
+        hqMarker.lookAt(this.earth.position); // Point cone away from Earth center
+        hqMarker.rotateX(Math.PI / 2); // Orient cone upwards
+        this.factionHQLayer.add(hqMarker);
+      }
     });
   }
   
@@ -462,13 +662,19 @@ export class Earth3D {
     
     this.scene.add(marker);
     this.eventMarkers.push(marker);
+
+    // Trigger particle effect for the event
+    this.createEventParticles(event.type, marker.position.clone());
     
-    // Remove after event duration
+    // Remove marker after event duration (visual only, actual event handled by engine)
     setTimeout(() => {
       this.scene.remove(marker);
+      // Ensure material and geometry are disposed if they are unique per marker
+      if (marker.material) (marker.material as THREE.Material).dispose();
+      if (marker.geometry) marker.geometry.dispose();
       const index = this.eventMarkers.indexOf(marker);
       if (index > -1) this.eventMarkers.splice(index, 1);
-    }, event.duration);
+    }, event.duration); // Match visual duration to game logic duration
   }
   
   private getEventColor(type: EventType): number {
@@ -480,9 +686,60 @@ export class Earth3D {
       [EventType.ROGUE_AI]: 0xff00ff,
       [EventType.SPACE_WEAPON]: 0xffffff,
       [EventType.HEALING]: 0x00ff88,
-      [EventType.ENVIRONMENTAL_RESTORATION]: 0x88ff00
+      [EventType.ENVIRONMENTAL_RESTORATION]: 0x88ff00,
+      // New Economic Event Colors
+      [EventType.TRADE_WAR]: 0xffaa00, // Orange/Yellow
+      [EventType.RESOURCE_DISCOVERY]: 0x00ffff, // Cyan
+      [EventType.ECONOMIC_RECESSION]: 0x808080, // Grey
+      [EventType.TECHNOLOGICAL_LEAP]: 0xaaaaff, // Light Blue/Purple
+      [EventType.GLOBAL_TRADE_DEAL]: 0x00aa00, // Green
     };
     return colors[type] || 0xffffff;
+  }
+
+  // Method to create specific particle effects for events (can be expanded)
+  private createEventParticles(type: EventType, position: THREE.Vector3) {
+    const particleCount = 50;
+    const particles = new THREE.BufferGeometry();
+    const pMaterial = new THREE.PointsMaterial({
+      color: this.getEventColor(type),
+      size: 0.05,
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      depthWrite: false,
+    });
+
+    const pVertices = [];
+    for (let i = 0; i < particleCount; i++) {
+      pVertices.push(position.x, position.y, position.z);
+    }
+    particles.setAttribute('position', new THREE.Float32BufferAttribute(pVertices, 3));
+
+    const particleSystem = new THREE.Points(particles, pMaterial);
+    this.scene.add(particleSystem);
+
+    // Animate particles
+    let particle_life = 0;
+    const animateParticles = () => {
+      particle_life += 0.01;
+      const positions = particles.attributes.position.array as Float32Array;
+      for (let i = 0; i < particleCount; i++) {
+        positions[i * 3 + 0] += (Math.random() - 0.5) * 0.02;
+        positions[i * 3 + 1] += (Math.random() - 0.5) * 0.02;
+        positions[i * 3 + 2] += (Math.random() - 0.5) * 0.02;
+      }
+      particles.attributes.position.needsUpdate = true;
+      pMaterial.opacity = Math.max(0, 1 - particle_life * 2);
+
+      if (pMaterial.opacity > 0) {
+        requestAnimationFrame(animateParticles);
+      } else {
+        this.scene.remove(particleSystem);
+        particles.dispose();
+        pMaterial.dispose();
+      }
+    };
+    animateParticles();
   }
   
   public compromiseSatellite(satelliteId: string) {
