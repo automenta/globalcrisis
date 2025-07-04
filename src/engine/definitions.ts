@@ -324,6 +324,12 @@ export interface PlanetaryFacilityDefinition {
     techRequired?: string; // TechId from Technology.ts
     constructionTime?: number; // Optional: time this upgrade takes, distinct from initial construction
   }[];
+  economicImpact?: { // Optional field for economic effects on the region
+    gdpBoost?: number; // Flat boost to GDP per tick
+    gdpMultiplier?: number; // Multiplicative boost to GDP (e.g., 1.05 for 5% boost)
+    productionModifier?: Partial<Record<StrategicResourceType, number>>; // e.g., { RARE_METALS: 1.1 } for 10% boost
+    demandModifier?: Partial<Record<StrategicResourceType, number>>; // e.g., { ANTIMATTER_CELLS: 0.9 } for 10% reduction in demand
+  };
 }
 
 export const FACILITY_DEFINITIONS: Record<FacilityType, PlanetaryFacilityDefinition> = {
@@ -403,6 +409,12 @@ export const FACILITY_DEFINITIONS: Record<FacilityType, PlanetaryFacilityDefinit
     visual: 'power_plant_visual', // Needs a visual key
     maxPerRegion: 2, // Allow a couple per region
     constructionTime: 15, // Takes 15 seconds to build
+    economicImpact: { // Example economic impact
+      gdpBoost: 5, // Adds 5 GDP per second (assuming tickDelta of 1 per second)
+      demandModifier: { // Slightly increases demand for maintenance materials
+        [StrategicResourceType.RARE_METALS]: 1.02 // 2% increase in demand for rare metals
+      }
+    }
   }
 };
 

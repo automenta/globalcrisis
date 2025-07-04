@@ -16,6 +16,9 @@ export interface WorldRegion {
   y: number;
   color: [number, number, number];
   events: RegionEvent[];
+  gdp: number; // Gross Domestic Product
+  resourceDemand: Record<StrategicResourceType, number>;
+  resourceProduction: Record<StrategicResourceType, number>;
 }
 
 export interface RegionEvent {
@@ -138,14 +141,22 @@ export class GameEngine {
   }
 
   createInitialWorld(numAI: number = 1): GameState {
+    const initialResourceValues = () => {
+      const resources: Record<StrategicResourceType, number> = {} as Record<StrategicResourceType, number>;
+      for (const resType of Object.values(StrategicResourceType)) {
+        resources[resType] = Math.random() * 10 + 5; // Base demand/production between 5-15
+      }
+      return resources;
+    };
+
     const regions: WorldRegion[] = [
       // Same region definitions as before
-      { id: 'na', name: 'North America', population: 580000000, health: 78, environment: 65, stability: 75, x: -0.6, y: 0.3, color: [0.3, 0.6, 0.9], events: [] },
-      { id: 'sa', name: 'South America', population: 430000000, health: 72, environment: 55, stability: 65, x: -0.4, y: -0.4, color: [0.4, 0.8, 0.3], events: [] },
-      { id: 'eu', name: 'Europe', population: 750000000, health: 82, environment: 70, stability: 80, x: 0.1, y: 0.4, color: [0.7, 0.4, 0.9], events: [] },
-      { id: 'af', name: 'Africa', population: 1400000000, health: 65, environment: 45, stability: 55, x: 0.2, y: -0.1, color: [0.9, 0.6, 0.2], events: [] },
-      { id: 'as', name: 'Asia', population: 4600000000, health: 74, environment: 50, stability: 70, x: 0.6, y: 0.2, color: [0.9, 0.3, 0.4], events: [] },
-      { id: 'oc', name: 'Oceania', population: 50000000, health: 85, environment: 75, stability: 85, x: 0.8, y: -0.5, color: [0.2, 0.9, 0.7], events: [] }
+      { id: 'na', name: 'North America', population: 580000000, health: 78, environment: 65, stability: 75, x: -0.6, y: 0.3, color: [0.3, 0.6, 0.9], events: [], gdp: 25000, resourceDemand: initialResourceValues(), resourceProduction: initialResourceValues() },
+      { id: 'sa', name: 'South America', population: 430000000, health: 72, environment: 55, stability: 65, x: -0.4, y: -0.4, color: [0.4, 0.8, 0.3], events: [], gdp: 10000, resourceDemand: initialResourceValues(), resourceProduction: initialResourceValues() },
+      { id: 'eu', name: 'Europe', population: 750000000, health: 82, environment: 70, stability: 80, x: 0.1, y: 0.4, color: [0.7, 0.4, 0.9], events: [], gdp: 22000, resourceDemand: initialResourceValues(), resourceProduction: initialResourceValues() },
+      { id: 'af', name: 'Africa', population: 1400000000, health: 65, environment: 45, stability: 55, x: 0.2, y: -0.1, color: [0.9, 0.6, 0.2], events: [], gdp: 5000, resourceDemand: initialResourceValues(), resourceProduction: initialResourceValues() },
+      { id: 'as', name: 'Asia', population: 4600000000, health: 74, environment: 50, stability: 70, x: 0.6, y: 0.2, color: [0.9, 0.3, 0.4], events: [], gdp: 30000, resourceDemand: initialResourceValues(), resourceProduction: initialResourceValues() },
+      { id: 'oc', name: 'Oceania', population: 50000000, health: 85, environment: 75, stability: 85, x: 0.8, y: -0.5, color: [0.2, 0.9, 0.7], events: [], gdp: 3000, resourceDemand: initialResourceValues(), resourceProduction: initialResourceValues() }
     ];
 
     const numberOfHexagons = 256;
@@ -436,13 +447,47 @@ export class GameEngine {
           }
           if (effect.stabilityModifier) {
             const region = state.regions.find(r => r.id === newFacility.regionId);
-            if (region) { // Stability is global, not per-player, but facility still contributes
+            if (region) {
               region.stability = Math.max(0, Math.min(100, region.stability + effect.stabilityModifier * deltaTime * state.speed));
             }
           }
         });
+
+        // Apply economic impacts to the region
+        if (definition.economicImpact) {
+          const region = state.regions.find(r => r.id === newFacility.regionId);
+          if (region) {
+            const tickDelta = deltaTime * state.speed;
+            if (definition.economicImpact.gdpBoost) {
+              region.gdp += definition.economicImpact.gdpBoost * tickDelta;
+            }
+            if (definition.economicImpact.gdpMultiplier) {
+              region.gdp *= (1 + (definition.economicImpact.gdpMultiplier - 1) * tickDelta);
+            }
+            region.gdp = Math.max(1, region.gdp);
+
+            if (definition.economicImpact.productionModifier) {
+              for (const resTypeStr in definition.economicImpact.productionModifier) {
+                const resType = resTypeStr as StrategicResourceType;
+                const modifier = definition.economicImpact.productionModifier[resType];
+                if (modifier && region.resourceProduction[resType] !== undefined) {
+                  region.resourceProduction[resType] *= (1 + (modifier - 1) * tickDelta);
+                }
+              }
+            }
+            if (definition.economicImpact.demandModifier) {
+              for (const resTypeStr in definition.economicImpact.demandModifier) {
+                const resType = resTypeStr as StrategicResourceType;
+                const modifier = definition.economicImpact.demandModifier[resType];
+                if (modifier && region.resourceDemand[resType] !== undefined) {
+                  region.resourceDemand[resType] *= (1 + (modifier - 1) * tickDelta);
+                  region.resourceDemand[resType] = Math.max(0.1, region.resourceDemand[resType]); // Demand shouldn't be zero
+                }
+              }
+            }
+          }
+        }
       }
-      // playerState.globalResources = modifiablePlayerResources; // Assign back if copied
     }
     return newFacility; // Return the modified copy
   }
@@ -682,21 +727,59 @@ private applyConflict(eventA: RegionEvent, eventB: RegionEvent, conflictDef: Non
   private updateRegion(region: WorldRegion, deltaTime: number, state: GameState): WorldRegion {
     const newRegion = { ...region };
     
-    const noise = this.noise2D(region.x * 5, state.time * 0.0001) * 0.1;
-    
-    newRegion.health = Math.max(0, Math.min(100, newRegion.health + noise));
-    newRegion.environment = Math.max(0, Math.min(100, newRegion.environment + noise * 0.8));
-    newRegion.stability = Math.max(0, Math.min(100, newRegion.stability + noise * 1.2));
+    const noise = this.noise2D(region.x * 5, state.time * 0.0001) * 0.05; // Reduced noise impact slightly
+    const tickDelta = deltaTime; // deltaTime already incorporates game speed from updateWorld
+
+    newRegion.health = Math.max(0, Math.min(100, newRegion.health + noise * tickDelta * 10));
+    newRegion.environment = Math.max(0, Math.min(100, newRegion.environment + noise * 0.8 * tickDelta * 10));
+    newRegion.stability = Math.max(0, Math.min(100, newRegion.stability + noise * 1.2 * tickDelta * 10));
+
+    // Economic Updates
+    const baseGdpGrowthFactor = 0.001; // Small base growth per tick
+    const stabilityFactor = newRegion.stability / 100;
+    const healthFactor = newRegion.health / 100;
+    newRegion.gdp += newRegion.gdp * (baseGdpGrowthFactor + (stabilityFactor - 0.5) * 0.01 + (healthFactor - 0.5) * 0.005) * tickDelta;
+    newRegion.gdp = Math.max(1, newRegion.gdp); // GDP should not go to zero or negative
+
+    let overallResourceBalanceScore = 0;
+    const numStrategicResources = Object.keys(StrategicResourceType).length;
+
+    for (const resType of Object.values(StrategicResourceType)) {
+        // Demand increases with population (very simplified)
+        newRegion.resourceDemand[resType] = Math.max(1, (newRegion.population / 100000000) * 5 * tickDelta + (newRegion.resourceDemand[resType] || 0) * (1 - tickDelta*0.1) ); // demand decays slowly if not replenished by pop change
+
+        // Production slightly tied to environment and stability (very simplified)
+        const productionFluctuation = (newRegion.environment / 100 - 0.5) * 0.1 + (newRegion.stability / 100 - 0.5) * 0.05;
+        newRegion.resourceProduction[resType] = Math.max(0, (newRegion.resourceProduction[resType] || 0) * (1 + productionFluctuation * tickDelta));
+
+        const balance = (newRegion.resourceProduction[resType] || 0) - (newRegion.resourceDemand[resType] || 0);
+        if (balance < 0) {
+            overallResourceBalanceScore -= 1;
+        } else {
+            overallResourceBalanceScore += 0.5; // Surplus is less impactful than deficit for stability adjustment
+        }
+    }
+
+    // Adjust stability based on overall resource balance
+    if (overallResourceBalanceScore < -numStrategicResources / 2) { // If more than half resources are in deficit
+        newRegion.stability -= 0.05 * tickDelta * 60; // Scaled to be per second like
+    } else if (overallResourceBalanceScore > numStrategicResources / 3) { // If more than a third are in surplus
+        newRegion.stability += 0.02 * tickDelta * 60;
+    }
+    newRegion.stability = Math.max(0, Math.min(100, newRegion.stability));
     
     // Apply effects of active events in this region
     state.activeEvents.forEach(event => {
         if (event.active && this.isEventInRegion(event, newRegion)) {
-            this.applyEventToRegion(newRegion, event);
+            this.applyEventToRegion(newRegion, event); // applyEventToRegion uses event.severity directly, not deltaTime scaled
         }
     });
     
-    const populationChange = (newRegion.health / 100) * (newRegion.environment / 100) * (newRegion.stability / 100) - 0.5;
-    newRegion.population = Math.max(0, newRegion.population * (1 + populationChange * 0.001));
+    // Population change based on health, environment, stability
+    // More sensitive population change model
+    const growthRate = (newRegion.health / 100 - 0.3) + (newRegion.environment / 100 - 0.4) + (newRegion.stability / 100 - 0.3); // Base at 0.3 + 0.4 + 0.3 = 1.0
+    const populationChangeFactor = growthRate * 0.0005 * tickDelta * 60; // Scaled to be per second like
+    newRegion.population = Math.max(0, newRegion.population * (1 + populationChangeFactor));
     
     return newRegion;
   }

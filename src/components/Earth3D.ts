@@ -154,11 +154,19 @@ export class Earth3D {
   
   private createEarth() {
     const geometry = new THREE.SphereGeometry(2, 64, 64);
+    const earthTexture = this._createProceduralTexture(this.createEarthTexture, 2048, 1024); // Higher res for Earth
+    const normalTexture = this._createProceduralTexture(this.createNormalMap, 1024, 512);
+    const cityLightsTexture = this._createProceduralTexture(this.createCityLightsTexture, 2048, 1024);
+
     const material = new THREE.MeshPhongMaterial({
-      map: this._createProceduralTexture(this.createEarthTexture),
-      normalMap: this._createProceduralTexture(this.createNormalMap, 512, 256),
-      shininess: 0.1,
-      transparent: false
+      map: earthTexture,
+      normalMap: normalTexture,
+      normalScale: new THREE.Vector2(0.5, 0.5), // Adjust normal map intensity
+      shininess: 5, // Slightly more shininess for water reflections
+      transparent: false,
+      emissiveMap: cityLightsTexture,
+      emissive: new THREE.Color(0xffff00), // Yellowish glow for cities
+      emissiveIntensity: 0.7 // Initial intensity for city lights
     });
     
     this.earth = new THREE.Mesh(geometry, material);
@@ -215,19 +223,107 @@ export class Earth3D {
   private createEarthTexture(ctx: CanvasRenderingContext2D, width: number, height: number) {
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
-    for (let i = 0; i < width; i++) {
-      for (let j = 0; j < height; j++) {
-        const index = (j * width + i) * 4;
-        const lon = (i / width) * 2 * Math.PI - Math.PI;
-        const lat = (j / height) * Math.PI - Math.PI / 2;
-        const noise1 = Math.sin(lat * 8) * Math.cos(lon * 6);
-        const noise2 = Math.sin(lat * 16) * Math.cos(lon * 12) * 0.5;
-        const elevation = noise1 + noise2;
-        if (elevation > 0.2) { // Land
-          data[index] = 34 + Math.random() * 40; data[index + 1] = 80 + Math.random() * 60; data[index + 2] = 20 + Math.random() * 30;
-        } else { // Ocean
-          data[index] = 10 + Math.random() * 20; data[index + 1] = 50 + Math.random() * 40; data[index + 2] = 120 + Math.random() * 80;
+
+    // Basic FBM (Fractional Brownian Motion) and noise generation
+    // For a more robust solution, a proper simplex noise library might be imported or implemented.
+    // Using Math.random() here for simplicity to simulate noise, not true Perlin/Simplex.
+    const pseudoRandom = (x: number, y: number, seed: number) => {
+        let  val = Math.sin(x * 12.9898 + y * 78.233 + seed) * 43758.5453;
+        val = val - Math.floor(val);
+        return val;
+    };
+
+    const noise = (x: number, y: number, seed: number, scale: number) => {
+        const ix = Math.floor(x / scale);
+        const iy = Math.floor(y / scale);
+        const fx = (x / scale) - ix;
+        const fy = (y / scale) - iy;
+
+        const a = pseudoRandom(ix, iy, seed);
+        const b = pseudoRandom(ix + 1, iy, seed);
+        const c = pseudoRandom(ix, iy + 1, seed);
+        const d = pseudoRandom(ix + 1, iy + 1, seed);
+
+        const ux = fx * fx * (3.0 - 2.0 * fx);
+        const uy = fy * fy * (3.0 - 2.0 * fy);
+
+        return a * (1-ux) * (1-uy) + b * ux * (1-uy) + c * (1-ux) * uy + d * ux * uy;
+    };
+
+    const fbm = (x: number, y: number, seed: number, initialScale: number, octaves: number, persistence: number, lacunarity: number) => {
+        let total = 0;
+        let frequency = 1;
+        let amplitude = 1;
+        let maxValue = 0;
+        let scale = initialScale;
+
+        for(let i = 0; i < octaves; i++) {
+            total += noise(x * frequency, y * frequency, seed + i, scale) * amplitude;
+            maxValue += amplitude;
+            amplitude *= persistence;
+            frequency *= lacunarity;
+            // scale /= lacunarity; // Optional: scale can also change
         }
+        return total / maxValue;
+    };
+
+
+    for (let j = 0; j < height; j++) { // y-coordinate, latitude
+      for (let i = 0; i < width; i++) { // x-coordinate, longitude
+        const index = (j * width + i) * 4;
+
+        // Normalized coordinates for texture mapping (lon, lat)
+        const u = i / width; // 0 to 1
+        const v = j / height; // 0 to 1
+
+        // Convert to spherical coordinates if needed for more accurate mapping,
+        // but for direct texture painting, u,v is fine.
+        // For latitude effect (poles vs equator)
+        const lat = (v - 0.5) * -Math.PI; // -PI/2 to PI/2 (South Pole to North Pole)
+        // const lon = (u - 0.5) * 2 * Math.PI; // -PI to PI (optional if longitude affects biomes)
+
+
+        // Elevation calculation using FBM
+        // Parameters for FBM: x, y, seed, initialScale, octaves, persistence, lacunarity
+        const elevation = fbm(i, j, 100, 128, 5, 0.5, 2.0); // Base elevation
+        const roughness = fbm(i, j, 200, 32, 3, 0.6, 2.2);  // For finer details/roughness
+        const finalElevation = (elevation * 0.75 + roughness * 0.25);
+
+        // Ocean
+        let r = 10 + finalElevation * 20;
+        let g = 50 + finalElevation * 40;
+        let b = 120 + finalElevation * 80;
+
+        if (finalElevation > 0.42) { // Land threshold
+          const absLatDegrees = Math.abs(lat * 180 / Math.PI);
+
+          if (absLatDegrees > 75) { // Polar Ice Caps
+            const iceNoise = fbm(i,j, 456, 16, 2, 0.5, 2.0)
+            r = 230 + iceNoise * 25;
+            g = 235 + iceNoise * 20;
+            b = 240 + iceNoise * 15;
+          } else if (absLatDegrees > 20 && absLatDegrees < 40 && finalElevation < 0.6 && roughness < 0.5) { // Desert Belt (simplified)
+            r = 210 + (finalElevation - 0.42) * 50 + roughness * 20;
+            g = 180 + (finalElevation - 0.42) * 50 + roughness * 10;
+            b = 100 + (finalElevation - 0.42) * 30;
+          } else { // Forests, Grasslands, Mountains
+            const mountainFactor = Math.max(0, (finalElevation - 0.65) / 0.35); // Higher elevation = more grey/rocky
+            const greenNoise = fbm(i,j, 789, 64, 3, 0.5, 2.0);
+
+            const baseGreenR = 34 + greenNoise * 30;
+            const baseGreenG = 80 + greenNoise * 50;
+            const baseGreenB = 20 + greenNoise * 20;
+
+            // Blend towards grey/brown for mountains
+            r = baseGreenR * (1 - mountainFactor) + (100 + roughness * 30) * mountainFactor;
+            g = baseGreenG * (1 - mountainFactor) + (90 + roughness * 30) * mountainFactor;
+            b = baseGreenB * (1 - mountainFactor) + (80 + roughness * 30) * mountainFactor;
+          }
+        }
+
+        data[index] = Math.max(0, Math.min(255, r));
+        data[index + 1] = Math.max(0, Math.min(255, g));
+        data[index + 2] = Math.max(0, Math.min(255, b));
         data[index + 3] = 255;
       }
     }
@@ -238,24 +334,47 @@ export class Earth3D {
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
     const elevations: number[][] = Array(height).fill(0).map(() => Array(width).fill(0));
-    // Simple noise function for elevation simulation
-    const simpleNoise = (x: number, y: number, scale: number, octaves: number, persistence: number) => {
-      let total = 0, frequency = scale, amplitude = 1, maxValue = 0;
-      for (let i = 0; i < octaves; i++) {
-        total += Math.sin(x * frequency) * Math.cos(y * frequency) * amplitude;
-        maxValue += amplitude; amplitude *= persistence; frequency *= 2;
-      }
-      return total / maxValue;
+
+    // FBM noise generation (consistent with createEarthTexture)
+    const pseudoRandom = (x: number, y: number, seed: number) => {
+        let val = Math.sin(x * 12.9898 + y * 78.233 + seed) * 43758.5453;
+        val = val - Math.floor(val);
+        return val;
     };
+    const noise = (x: number, y: number, seed: number, scale: number) => {
+        const ix = Math.floor(x / scale);
+        const iy = Math.floor(y / scale);
+        const fx = (x / scale) - ix;
+        const fy = (y / scale) - iy;
+        const a = pseudoRandom(ix, iy, seed);
+        const b = pseudoRandom(ix + 1, iy, seed);
+        const c = pseudoRandom(ix, iy + 1, seed);
+        const d = pseudoRandom(ix + 1, iy + 1, seed);
+        const ux = fx * fx * (3.0 - 2.0 * fx);
+        const uy = fy * fy * (3.0 - 2.0 * fy);
+        return a * (1-ux) * (1-uy) + b * ux * (1-uy) + c * (1-ux) * uy + d * ux * uy;
+    };
+    const fbm = (x: number, y: number, seed: number, initialScale: number, octaves: number, persistence: number, lacunarity: number) => {
+        let total = 0, frequency = 1, amplitude = 1, maxValue = 0, scale = initialScale;
+        for(let k = 0; k < octaves; k++) { // Renamed loop variable to avoid conflict with outer scope 'i'
+            total += noise(x * frequency, y * frequency, seed + k, scale) * amplitude;
+            maxValue += amplitude;
+            amplitude *= persistence;
+            frequency *= lacunarity;
+        }
+        return total / maxValue;
+    };
+
     for (let j = 0; j < height; j++) {
       for (let i = 0; i < width; i++) {
-        const u = i / width, v = j / height, nx = u * 20, ny = v * 10;
-        let elevation = simpleNoise(nx, ny, 0.5, 4, 0.5);
-        elevation += Math.sin(u * Math.PI * 2) * 0.3; elevation += Math.cos(v * Math.PI * 3) * 0.2;
-        elevations[j][i] = (elevation + 1) / 2;
+        // Use the same FBM parameters as in createEarthTexture for elevation calculation
+        const elevation = fbm(i, j, 100, 128, 5, 0.5, 2.0); // Base elevation for landmass
+        const roughness = fbm(i, j, 200, 32, 3, 0.6, 2.2);  // Roughness
+        const finalElevation = (elevation * 0.75 + roughness * 0.25);
+        elevations[j][i] = finalElevation; // Store raw FBM value, which is already 0-1 like
       }
     }
-    const strength = 5.0; // Controls the intensity of the normal map
+    const strength = 2.0; // Adjusted strength, might need tuning
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const index = (y * width + x) * 4;
@@ -299,6 +418,79 @@ export class Earth3D {
         data[index] = cloudBrightness; data[index + 1] = cloudBrightness; data[index + 2] = cloudBrightness;
         data[index + 3] = cloudAlpha * 255;
       }
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }
+
+  private createCityLightsTexture(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    const imageData = ctx.createImageData(width, height);
+    const data = imageData.data;
+
+    // Re-use noise functions if they are accessible, or redefine locally for encapsulation
+    const pseudoRandom = (x: number, y: number, seed: number) => {
+        let val = Math.sin(x * 12.9898 + y * 78.233 + seed) * 43758.5453;
+        val = val - Math.floor(val);
+        return val;
+    };
+    const noise = (x: number, y: number, seed: number, scale: number) => {
+        const ix = Math.floor(x / scale);
+        const iy = Math.floor(y / scale);
+        const fx = (x / scale) - ix;
+        const fy = (y / scale) - iy;
+        const a = pseudoRandom(ix, iy, seed);
+        const b = pseudoRandom(ix + 1, iy, seed);
+        const c = pseudoRandom(ix, iy + 1, seed);
+        const d = pseudoRandom(ix + 1, iy + 1, seed);
+        const ux = fx * fx * (3.0 - 2.0 * fx);
+        const uy = fy * fy * (3.0 - 2.0 * fy);
+        return a * (1-ux) * (1-uy) + b * ux * (1-uy) + c * (1-ux) * uy + d * ux * uy;
+    };
+    const fbm = (x: number, y: number, seed: number, initialScale: number, octaves: number, persistence: number, lacunarity: number) => {
+        let total = 0, frequency = 1, amplitude = 1, maxValue = 0, scale = initialScale;
+        for(let i = 0; i < octaves; i++) {
+            total += noise(x * frequency, y * frequency, seed + i, scale) * amplitude;
+            maxValue += amplitude;
+            amplitude *= persistence;
+            frequency *= lacunarity;
+        }
+        return total / maxValue;
+    };
+
+    // Use the main landmass FBM to hint where cities might be (more lights on land)
+    const landFBM = (x: number, y: number) => fbm(x, y, 100, 128, 5, 0.5, 2.0); // Same as in createEarthTexture
+
+    for (let j = 0; j < height; j++) {
+        for (let i = 0; i < width; i++) {
+            const index = (j * width + i) * 4;
+
+            const landMassValue = landFBM(i,j);
+            let intensity = 0;
+
+            if (landMassValue > 0.42) { // Only generate lights on land areas
+                // Noise for city clustering and intensity
+                const cityClusterNoise = fbm(i, j, 300, 64, 4, 0.4, 2.5);
+                const fineDetailNoise = fbm(i, j, 400, 8, 2, 0.5, 3.0);
+
+                if (cityClusterNoise > 0.6) { // Threshold for major city areas
+                    intensity = (cityClusterNoise - 0.6) / 0.4; // Normalize
+                    intensity = Math.pow(intensity, 2); // Make bright spots more prominent
+                    intensity *= (0.5 + fineDetailNoise * 0.5); // Add some finer variations
+
+                    // Reduce lights in extreme latitudes (less dense population)
+                    const v = j / height; // 0 to 1
+                    const latFactor = 1.0 - Math.pow(Math.abs(v - 0.5) * 2, 3); // Strong falloff towards poles
+                    intensity *= latFactor;
+                }
+            }
+
+            intensity = Math.max(0, Math.min(1, intensity)) * 255;
+
+            // City lights are typically yellowish-orange
+            data[index] = intensity; // R
+            data[index + 1] = intensity * 0.8; // G (make it a bit orange/yellow)
+            data[index + 2] = intensity * 0.3; // B
+            data[index + 3] = 255; // Alpha
+        }
     }
     ctx.putImageData(imageData, 0, 0);
   }

@@ -154,6 +154,9 @@ export default function GlobalCrisisSimulator() {
         const newState = gameEngineRef.current.updateWorld(currentGameState, deltaTime);
         setGameState(newState); // This triggers re-render and updates gameState for next cycle/other effects
         
+        // Update ambient audio based on the new state
+        audioRef.current.updateAmbient(newState);
+
         earth3DRef.current.updateRegionData(newState.regions);
           
         newState.activeEvents.forEach(event => {
