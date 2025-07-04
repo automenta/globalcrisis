@@ -36,15 +36,33 @@ export class Earth3D {
   private satellites: Satellite[] = [];
   private regionMarkers: THREE.Mesh[] = [];
   private eventMarkers: THREE.Mesh[] = [];
+  private facilityMarkers: THREE.Mesh[] = [];
   private raycaster = new THREE.Raycaster();
   private mouse = new THREE.Vector2();
-  private controls: any;
+  // private controls: any; // Will replace with more integrated controls
   private animationId: number = 0;
-  
+
+  // Camera control parameters
+  private isDragging = false;
+  private previousMousePosition = { x: 0, y: 0 };
+  private targetCameraPosition = new THREE.Vector3();
+  private targetFocusPoint = new THREE.Vector3(0, 0, 0); // What the camera should look at
+  private currentCameraDistance = 8; // Initial distance
+  private minZoomDistance = 0.1; // For close-up views (e.g., hexagon level)
+  private maxZoomDistance = 50;  // For planetary view
+  private zoomTarget: THREE.Object3D | null = null; // Optional object to focus on (e.g. selected hex)
+
   public onRegionClick?: (region: WorldRegion, x: number, y: number) => void;
   public onSatelliteClick?: (satellite: Satellite, x: number, y: number) => void;
   public onEventClick?: (event: RegionEvent, x: number, y: number) => void;
+  public onHexagonClick?: (hexagonId: string, hexagonCenter: THREE.Vector3, x: number, y: number) => void;
   
+  private hexagonGrid?: THREE.LineSegments;
+  private hexagons: { id: string, center: THREE.Vector3, vertices: THREE.Vector3[] }[] = [];
+  private selectedHexagonMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, side: THREE.DoubleSide });
+  private selectedHexagonMesh?: THREE.Mesh;
+
+
   constructor(container: HTMLElement) {
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 10000);
@@ -61,6 +79,8 @@ export class Earth3D {
     this.createAtmosphere();
     this.createClouds();
     this.createSatellites();
+    this.createHexagonGridData(2); // Adjust detail level as needed
+    this.visualizeHexagonGrid();
     this.setupControls();
     this.setupEventListeners(container);
     this.animate();
@@ -480,45 +500,97 @@ export class Earth3D {
   }
   
   private setupControls() {
-    // Manual orbit controls implementation
-    let isDragging = false;
-    let previousMousePosition = { x: 0, y: 0 };
-    
+    this.targetCameraPosition.copy(this.camera.position);
+    this.currentCameraDistance = this.camera.position.length();
+
     this.renderer.domElement.addEventListener('mousedown', (event) => {
-      isDragging = true;
-      previousMousePosition.x = event.clientX;
-      previousMousePosition.y = event.clientY;
-    });
-    
-    this.renderer.domElement.addEventListener('mousemove', (event) => {
-      if (isDragging) {
-        const deltaMove = {
-          x: event.clientX - previousMousePosition.x,
-          y: event.clientY - previousMousePosition.y
-        };
-        
-        const rotationSpeed = 0.005;
-        this.earth.rotation.y += deltaMove.x * rotationSpeed;
-        this.earth.rotation.x += deltaMove.y * rotationSpeed;
-        this.atmosphere.rotation.y = this.earth.rotation.y;
-        this.atmosphere.rotation.x = this.earth.rotation.x;
-        this.clouds.rotation.y = this.earth.rotation.y * 1.1;
-        this.clouds.rotation.x = this.earth.rotation.x * 1.1;
-        
-        previousMousePosition.x = event.clientX;
-        previousMousePosition.y = event.clientY;
+      if (event.button === 0) { // Left mouse button
+        this.isDragging = true;
+        this.previousMousePosition.x = event.clientX;
+        this.previousMousePosition.y = event.clientY;
       }
     });
     
-    this.renderer.domElement.addEventListener('mouseup', () => {
-      isDragging = false;
+    this.renderer.domElement.addEventListener('mousemove', (event) => {
+      if (this.isDragging) {
+        const deltaMove = {
+          x: event.clientX - this.previousMousePosition.x,
+          y: event.clientY - this.previousMousePosition.y
+        };
+        
+        // Create a quaternion for rotation based on mouse movement
+        const rotationSpeed = 0.005;
+        const deltaRotationQuaternion = new THREE.Quaternion()
+          .setFromEuler(new THREE.Euler(
+            deltaMove.y * rotationSpeed,
+            deltaMove.x * rotationSpeed,
+            0,
+            'XYZ' // Order of rotation
+          ));
+        
+        // Apply this rotation to the target camera position relative to the target focus point
+        this.targetCameraPosition.sub(this.targetFocusPoint);
+        this.targetCameraPosition.applyQuaternion(deltaRotationQuaternion);
+        this.targetCameraPosition.add(this.targetFocusPoint);
+
+        // Also rotate the earth group if we are not focused on a specific target
+        if (!this.zoomTarget) {
+            // This part needs careful consideration:
+            // Rotating the Earth itself vs. just moving the camera around it.
+            // For a typical orbit control, the camera moves. The Earth might have its own axial tilt and rotation.
+            // Let's assume camera moves around a fixed (or slowly rotating) earth for now.
+            // The earth's own rotation is handled in the animate loop.
+            // This drag should rotate our view around the earth.
+        }
+
+        this.previousMousePosition.x = event.clientX;
+        this.previousMousePosition.y = event.clientY;
+      }
     });
     
-    this.renderer.domElement.addEventListener('wheel', (event) => {
-      const zoomSpeed = 0.1;
-      this.camera.position.multiplyScalar(1 + (event.deltaY > 0 ? zoomSpeed : -zoomSpeed));
-      this.camera.position.clampLength(3, 50);
+    this.renderer.domElement.addEventListener('mouseup', (event) => {
+      if (event.button === 0) {
+        this.isDragging = false;
+      }
     });
+
+    this.renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault()); // Prevent context menu on right click
+
+    this.renderer.domElement.addEventListener('dblclick', (event) => {
+      // Check if the double click was on the Earth or empty space
+      this.mouse.x = (event.clientX / this.renderer.domElement.clientWidth) * 2 - 1;
+      this.mouse.y = -(event.clientY / this.renderer.domElement.clientHeight) * 2 + 1;
+      this.raycaster.setFromCamera(this.mouse, this.camera);
+
+      const intersects = this.raycaster.intersectObject(this.earth);
+      const satelliteIntersects = this.raycaster.intersectObjects(this.satellites.map(s => s.mesh));
+
+
+      if (intersects.length > 0 || satelliteIntersects.length === 0) { // Clicked on earth or empty space
+        // Zoom out to planetary view
+        this.zoomToTarget(new THREE.Vector3(0, 0, 0), this.maxZoomDistance / 2); // Or a default planetary distance
+        this.zoomTarget = null;
+        this.highlightHexagon(null); // Clear selection
+      }
+      // If double-clicked on a satellite or other specific object, could have different behavior.
+    });
+
+    this.renderer.domElement.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      const zoomSpeed = 0.1;
+      const zoomDirection = event.deltaY > 0 ? 1 : -1;
+
+      // Calculate new distance
+      let newDistance = this.currentCameraDistance * (1 + zoomDirection * zoomSpeed);
+      newDistance = Math.max(this.minZoomDistance, Math.min(this.maxZoomDistance, newDistance));
+
+      this.currentCameraDistance = newDistance;
+
+      // Update target camera position based on new distance along the view vector
+      const direction = new THREE.Vector3().subVectors(this.targetCameraPosition, this.targetFocusPoint).normalize();
+      this.targetCameraPosition.copy(this.targetFocusPoint).addScaledVector(direction, this.currentCameraDistance);
+
+    }, { passive: false }); // passive:false to allow preventDefault
   }
   
   private setupEventListeners(container: HTMLElement) {
@@ -543,11 +615,34 @@ export class Earth3D {
       // Check earth intersections for regions
       const earthIntersects = this.raycaster.intersectObject(this.earth);
       if (earthIntersects.length > 0) {
-        const point = earthIntersects[0].point;
-        const region = this.getRegionFromPoint(point);
-        if (region && this.onRegionClick) {
-          this.onRegionClick(region, event.clientX, event.clientY);
+        const intersectPoint = earthIntersects[0].point;
+
+        // Try to find a hexagon first
+        const hexagon = this.getHexagonFromPoint(intersectPoint);
+        if (hexagon) {
+          this.highlightHexagon(hexagon);
+          // Auto-zoom to selected hexagon
+          const hexViewDistance = 0.5; // Adjust this for desired closeness to hexagon
+          this.zoomToTarget(hexagon.center, hexViewDistance);
+          this.zoomTarget = this.selectedHexagonMesh; // Set the focused object
+
+          if (this.onHexagonClick) {
+            this.onHexagonClick(hexagon.id, hexagon.center, event.clientX, event.clientY);
+          }
+        } else {
+          // Fallback to region click if no specific hexagon is identified
+          // Or if clicking on empty globe space, maybe zoom out or clear target
+          this.zoomTarget = null;
+          // Or if you want to clear hexagon selection when clicking elsewhere on globe:
+          this.highlightHexagon(null);
+          const region = this.getRegionFromPoint(intersectPoint);
+          if (region && this.onRegionClick) {
+            this.onRegionClick(region, event.clientX, event.clientY);
+          }
         }
+      } else {
+         // Clicked outside the earth, clear hexagon selection
+        this.highlightHexagon(null);
       }
     });
   }
@@ -570,13 +665,44 @@ export class Earth3D {
   
   private animate = () => {
     this.animationId = requestAnimationFrame(this.animate);
+    const delta = 0.05; // Smoothing factor for camera movement (lower is slower/smoother)
+
+    // Smoothly interpolate camera position
+    this.camera.position.lerp(this.targetCameraPosition, delta);
     
-    // Rotate earth slowly
-    this.earth.rotation.y += 0.001;
-    this.atmosphere.rotation.y += 0.001;
-    this.clouds.rotation.y += 0.0012;
+    // Smoothly interpolate focus point (though camera.lookAt is immediate,
+    // if targetFocusPoint changes smoothly, the lookAt will follow smoothly)
+    // For more advanced controls, one might also lerp a separate "currentFocusPoint"
+    // and then call camera.lookAt(currentFocusPoint).
+    this.camera.lookAt(this.targetFocusPoint);
     
-    // Update satellite positions
+    // Update currentCameraDistance based on actual position,
+    // in case of external changes or to ensure consistency.
+    this.currentCameraDistance = this.camera.position.distanceTo(this.targetFocusPoint);
+
+    // Control hexagon grid visibility based on zoom
+    if (this.hexagonGrid) {
+      const hexGridVisibleDistance = 4; // Show grid if camera is closer than this
+      if (this.currentCameraDistance < hexGridVisibleDistance) {
+        this.hexagonGrid.visible = true;
+        // Potentially adjust opacity based on distance for a fade-in/out effect
+        const opacityFactor = Math.max(0, 1 - (this.currentCameraDistance - (hexGridVisibleDistance / 2)) / (hexGridVisibleDistance / 2));
+        (this.hexagonGrid.material as THREE.LineBasicMaterial).opacity = Math.min(0.25, 0.05 + opacityFactor * 0.2); // subtle fade
+      } else {
+        this.hexagonGrid.visible = false;
+      }
+    }
+
+
+    // Rotate earth slowly (axial tilt and spin)
+    // This should be independent of camera controls.
+    // For simplicity, let's assume a simple y-axis rotation for now.
+    this.earth.rotation.y += 0.0005;
+    this.atmosphere.rotation.y += 0.0005;
+    // Clouds can rotate slightly faster or with some parallax
+    this.clouds.rotation.y += 0.0006;
+
+    // Update satellite positions (relative to the Earth's group if they orbit it)
     this.satellites.forEach(satellite => {
       const { orbit } = satellite;
       orbit.phase += orbit.speed;
@@ -622,16 +748,254 @@ export class Earth3D {
     this.renderer.render(this.scene, this.camera);
   };
 
+  public zoomToTarget(targetPointOnGlobe: THREE.Vector3, distance: number, instant: boolean = false) {
+    this.targetFocusPoint.copy(targetPointOnGlobe);
+
+    // Calculate the direction from the target point back to the current camera position (or a default direction)
+    // This maintains the current viewing angle if possible, or resets to a sensible default.
+    let direction = new THREE.Vector3().subVectors(this.camera.position, this.targetFocusPoint).normalize();
+
+    // If the direction is zero (e.g., camera is already AT the targetFocusPoint, highly unlikely for different points)
+    // or if the new target is very different, we might want a default orientation.
+    // For instance, always look "down" from a point directly above the target.
+    if (direction.lengthSq() < 0.001) {
+      // Default direction: from directly above the target point, relative to globe center
+      direction.copy(targetPointOnGlobe).normalize();
+    }
+
+    this.targetCameraPosition.copy(this.targetFocusPoint).addScaledVector(direction, distance);
+    this.currentCameraDistance = distance; // Update the stored distance
+
+    if (instant) {
+      this.camera.position.copy(this.targetCameraPosition);
+      this.camera.lookAt(this.targetFocusPoint);
+    }
+    // The animate loop will handle smooth transition if not instant
+  }
+
   // Helper to set original color for restoration
   private setOriginalColor(mesh: THREE.Mesh, color: number) {
     mesh.userData.originalColor = color;
     mesh.userData.isPrimaryColorPart = true;
   }
+
+  private createHexagonGridData(detail: number = 2) {
+    const earthRadius = 2; // Must match earth sphere geometry radius
+    const icosahedron = new THREE.IcosahedronGeometry(earthRadius, detail);
+    const vertices = icosahedron.attributes.position;
+    const uniqueVertices = new Map<string, THREE.Vector3>();
+
+    for (let i = 0; i < vertices.count; i++) {
+      const x = vertices.getX(i);
+      const y = vertices.getY(i);
+      const z = vertices.getZ(i);
+      const key = `${x.toFixed(5)},${y.toFixed(5)},${z.toFixed(5)}`;
+      if (!uniqueVertices.has(key)) {
+        uniqueVertices.set(key, new THREE.Vector3(x, y, z));
+      }
+    }
+
+    let hexId = 0;
+    uniqueVertices.forEach(vertex => {
+      // For a true hexagonal grid, we'd need dual polyhedron (truncated icosahedron)
+      // or more complex sphere tiling algorithms (e.g., Voronoi on sphere).
+      // As a simplification, we'll consider each vertex of the subdivided icosahedron
+      // as a "center" of a conceptual tile/hexagon.
+      // The "vertices" of this hexagon would then be derived, e.g., by finding midpoints
+      // to adjacent uniqueVertices or using a fixed angular distance.
+      // This is a placeholder for a more robust hex generation.
+
+      // Placeholder for actual hexagon vertices - for now, just use the center.
+      // A real implementation would calculate 6 surrounding points on the sphere.
+      const placeholderHexVertices: THREE.Vector3[] = [];
+      const numSides = 6;
+      const angleStep = (Math.PI * 2) / numSides;
+      const arbitraryNormal = vertex.clone().cross(new THREE.Vector3(0,1,0)).normalize(); // An arbitrary tangent
+      if (arbitraryNormal.lengthSq() === 0) arbitraryNormal.set(1,0,0); // Handle case where vertex is (0,1,0)
+
+      const tangent = arbitraryNormal;
+      const bitangent = vertex.clone().cross(tangent).normalize();
+
+      // Approximate size of hexagon - this is tricky and depends on subdivision level
+      const hexRadius = earthRadius * (Math.PI / (10 * (detail + 1))); // very rough approximation
+
+      for(let i=0; i<numSides; ++i) {
+        const angle = i * angleStep;
+        const displacedPoint = tangent.clone().multiplyScalar(Math.cos(angle) * hexRadius)
+                                .add(bitangent.clone().multiplyScalar(Math.sin(angle) * hexRadius));
+        const hexVertex = vertex.clone().add(displacedPoint).normalize().multiplyScalar(earthRadius + 0.001); // slightly above surface
+        placeholderHexVertices.push(hexVertex);
+      }
+
+
+      this.hexagons.push({
+        id: `hex_${hexId++}`,
+        center: vertex.clone().normalize().multiplyScalar(earthRadius + 0.001), // Ensure it's on the surface for picking
+        vertices: placeholderHexVertices, // These would define the hexagon shape
+      });
+    });
+    icosahedron.dispose();
+  }
+
+  private visualizeHexagonGrid() {
+    if (this.hexagonGrid) {
+      this.scene.remove(this.hexagonGrid);
+      this.hexagonGrid.geometry.dispose();
+      (this.hexagonGrid.material as THREE.Material).dispose();
+    }
+
+    const points = [];
+    this.hexagons.forEach(hex => {
+      // To draw lines for hexagons, we need proper vertices for each hex.
+      // The current placeholder `hex.vertices` is a rough approximation.
+      // For simplicity, let's draw a small marker at each hex center for now,
+      // or if vertices are somewhat valid, draw edges.
+      if (hex.vertices.length === 6) {
+        for (let i = 0; i < hex.vertices.length; i++) {
+          points.push(hex.vertices[i]);
+          points.push(hex.vertices[(i + 1) % hex.vertices.length]);
+        }
+      } else { // Fallback: draw a small cross or dot at the center
+        const center = hex.center;
+        const d = 0.02; // size of marker
+        points.push(center.clone().add(new THREE.Vector3(-d,0,0)));
+        points.push(center.clone().add(new THREE.Vector3(d,0,0)));
+        points.push(center.clone().add(new THREE.Vector3(0,-d,0)));
+        points.push(center.clone().add(new THREE.Vector3(0,d,0)));
+      }
+    });
+
+    if (points.length === 0) return;
+
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({
+      color: 0xffffff,  // White grid lines
+      transparent: true,
+      opacity: 0.15 // Make them subtle
+    });
+
+    this.hexagonGrid = new THREE.LineSegments(geometry, material);
+    this.hexagonGrid.name = "HexagonGrid";
+    this.scene.add(this.hexagonGrid);
+  }
+
+  private getHexagonFromPoint(pointOnSphere: THREE.Vector3): { id: string, center: THREE.Vector3, vertices: THREE.Vector3[] } | null {
+    if (this.hexagons.length === 0) return null;
+
+    let closestHex = null;
+    let minDistanceSq = Infinity;
+
+    // Normalize the point on sphere to match hexagon center altitudes if necessary
+    // (currently they should both be at earthRadius + 0.001)
+    const normalizedPoint = pointOnSphere.clone().normalize().multiplyScalar(this.earth.geometry.parameters.radius + 0.001);
+
+
+    this.hexagons.forEach(hex => {
+      const distanceSq = hex.center.distanceToSquared(normalizedPoint);
+      if (distanceSq < minDistanceSq) {
+        minDistanceSq = distanceSq;
+        closestHex = hex;
+      }
+    });
+
+    // Add a threshold to ensure the click is reasonably close to a center
+    // This threshold depends on the density of your grid.
+    // For an icosahedron subdivision, distance between centers is somewhat regular.
+    // Let's say if it's further than an approximate hex radius, it's not a valid click.
+    // This needs tuning based on `detail` level.
+    const approxHexRadiusSq = Math.pow( (this.earth.geometry.parameters.radius * Math.PI) / (10 * (2+1) * 2), 2); // very rough
+    if (minDistanceSq > approxHexRadiusSq * 2) { // Heuristic, may need adjustment
+       // console.log("Clicked too far from any hex center", minDistanceSq, approxHexRadiusSq);
+       // return null;
+    }
+
+
+    return closestHex;
+  }
+
+  public highlightHexagon(hex: { id: string, center: THREE.Vector3, vertices: THREE.Vector3[] } | null) {
+    if (!this.selectedHexagonMesh) {
+      // Create the mesh once
+      const initialGeometry = new THREE.BufferGeometry(); // Empty initially
+      this.selectedHexagonMesh = new THREE.Mesh(initialGeometry, this.selectedHexagonMaterial);
+      this.selectedHexagonMesh.name = "SelectedHexagon";
+      this.selectedHexagonMesh.visible = false; // Start hidden
+      this.scene.add(this.selectedHexagonMesh);
+    }
+
+    if (hex && hex.vertices.length === 6) {
+      const vertices = [];
+      for (let i = 0; i < hex.vertices.length; ++i) {
+        vertices.push(hex.vertices[i].x, hex.vertices[i].y, hex.vertices[i].z);
+      }
+
+      const indices = [];
+      // Create a triangle fan for the hexagon face (assuming convex and ordered vertices)
+      for (let i = 1; i < hex.vertices.length - 1; i++) {
+        indices.push(0, i, i + 1);
+      }
+
+      // Update geometry
+      this.selectedHexagonMesh.geometry.dispose(); // Dispose old geometry attributes
+      const newGeometry = new THREE.BufferGeometry();
+      newGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+      newGeometry.setIndex(indices);
+      // newGeometry.computeVertexNormals(); // Not strictly necessary for MeshBasicMaterial without lighting
+
+      this.selectedHexagonMesh.geometry = newGeometry;
+      this.selectedHexagonMesh.visible = true;
+    } else {
+      this.selectedHexagonMesh.visible = false;
+    }
+  }
   
   public updateRegionData(regions: WorldRegion[]) {
-    // Update region visualization based on game state
+    // Clear existing region markers
+    this.regionMarkers.forEach(marker => this.scene.remove(marker));
+    this.regionMarkers = [];
+
+    const earthRadius = this.earth.geometry.parameters.radius;
+
     regions.forEach(region => {
-      // Add visual indicators for region health/status
+      // Simple spherical coordinates to Cartesian for marker placement
+      // region.x and region.y are expected to be normalized [-1, 1] style or lat/lon
+      // Assuming region.x is longitude-like, region.y is latitude-like from GameEngine
+      // Convert to spherical coordinates: phi (polar, from y-axis), theta (azimuthal, around y-axis)
+      // Three.js Spherical: radius, phi (polar angle from positive Y axis), theta (equatorial angle around Y axis from positive Z axis)
+      // Typical geographic: lat (angle from equatorial plane), lon (angle from prime meridian)
+      // If region.x = lon, region.y = lat (in radians for calculation)
+      // phi = PI/2 - lat
+      // theta = lon
+      // The GameEngine uses x,y in a way that seems to be normalized screen/map like.
+      // Let's assume region.x and region.y from GameEngine are somewhat like normalized projection coordinates.
+      // For a simple marker at the region's "center" as defined in GameEngine:
+      // We need to map these x, y to a point on the sphere.
+      // If region.x, region.y are [-1,1] for x and [-0.5, 0.5] for y (approx based on GameEngine values)
+      // This is a bit abstract. Let's use a simpler conversion for visualization for now.
+      // A better way would be for GameEngine regions to have explicit lat/lon centers.
+      // Using the existing x,y as direct mapping to sphere points for visualization if they are already somewhat spherical.
+      // The current GameEngine region x,y are: x: -0.6 to 0.8, y: -0.5 to 0.4. These look like normalized XY plane coords.
+      // We need to project these onto the sphere.
+      // Let's assume these are longitude (scaled) and latitude (scaled) for simplicity of visualization.
+      const phi = Math.PI / 2 - region.y; // Assuming region.y is like latitude
+      const theta = region.x; // Assuming region.x is like longitude
+
+      const position = new THREE.Vector3().setFromSphericalCoords(earthRadius + 0.05, phi, theta);
+
+      // Create a simple marker (e.g., a small sphere or sprite)
+      const markerGeometry = new THREE.SphereGeometry(0.05, 16, 16); // Small sphere
+      const markerMaterial = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(...(region.color || [1,1,1])), // Use region color or default white
+        transparent: true,
+        opacity: 0.7
+      });
+      const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+      marker.position.copy(position);
+      marker.userData.regionId = region.id;
+      marker.name = `RegionMarker_${region.id}`;
+
+      this.scene.add(marker);
+      this.regionMarkers.push(marker);
     });
   }
   
@@ -698,6 +1062,65 @@ export class Earth3D {
       cancelAnimationFrame(this.animationId);
     }
     this.renderer.dispose();
+  }
+
+  public updateFacilityVisuals(facilities: PlanetaryFacility[], allHexagons: { id: string, center: THREE.Vector3 }[], regions: WorldRegion[]) {
+    this.facilityMarkers.forEach(marker => this.scene.remove(marker));
+    this.facilityMarkers = [];
+    const earthRadius = this.earth.geometry.parameters.radius;
+
+    facilities.forEach(facility => {
+      let position: THREE.Vector3 | null = null;
+      if (facility.hexagonId) {
+        const hex = allHexagons.find(h => h.id === facility.hexagonId);
+        if (hex) {
+          position = hex.center.clone().normalize().multiplyScalar(earthRadius + 0.02); // Slightly above surface
+        }
+      }
+
+      if (!position) {
+        // Fallback to region center if no hexagonId or hex not found
+        const region = regions.find(r => r.id === facility.regionId);
+        if (region) {
+          // Approx. region center logic (same as region markers, maybe refactor to a helper)
+          const phi = Math.PI / 2 - region.y;
+          const theta = region.x;
+          position = new THREE.Vector3().setFromSphericalCoords(earthRadius + 0.05, phi, theta);
+        }
+      }
+
+      if (position) {
+        // TODO: Use facility.type to get definition and visual key from FACILITY_DEFINITIONS
+        // For now, a generic marker
+        let color = 0x999999; // Default color
+        if (facility.type === 'research_outpost') color = 0x00ffff;
+        else if (facility.type === 'resource_extractor') color = 0xffaa00;
+        else if (facility.type === 'defense_platform') color = 0xff00ff;
+
+        const markerGeom = new THREE.BoxGeometry(0.06, 0.06, 0.1); // Simple box for now
+        const markerMat = new THREE.MeshPhongMaterial({ color });
+        const marker = new THREE.Mesh(markerGeom, markerMat);
+        marker.position.copy(position);
+        marker.lookAt(this.earth.position); // Orient "up" from earth center
+
+        // Visual cue for construction vs operational
+        if (facility.constructionTimeLeft && facility.constructionTimeLeft > 0) {
+          markerMat.opacity = 0.5;
+          markerMat.transparent = true;
+        } else if (!facility.operational) { // Not yet started construction or errored (though not modeled yet)
+            markerMat.opacity = 0.3;
+            markerMat.transparent = true;
+        } else {
+            markerMat.opacity = 1.0;
+            markerMat.transparent = false;
+        }
+
+        marker.userData = { facilityId: facility.id, type: 'facility' };
+        marker.name = `FacilityMarker_${facility.id}`;
+        this.scene.add(marker);
+        this.facilityMarkers.push(marker);
+      }
+    });
   }
 
   public projectToScreen(worldPosition: THREE.Vector3): THREE.Vector3 | null {
