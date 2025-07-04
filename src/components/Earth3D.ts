@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { GameState, WorldRegion, RegionEvent, EventType } from '../engine/GameEngine';
+import { GameState, WorldRegion, RegionEvent, EventType, Faction, Ideology } from '../engine/GameEngine'; // Added Faction, Ideology
 
 export interface Satellite {
   id: string;
@@ -36,6 +36,8 @@ export class Earth3D {
   private satellites: Satellite[] = [];
   private regionMarkers: THREE.Mesh[] = [];
   private eventMarkers: THREE.Mesh[] = [];
+  private factionInfluenceOverlay: THREE.Mesh | null = null; // For faction visualization
+  private factionHQLayer: THREE.Group = new THREE.Group(); // Group for HQ markers
   private raycaster = new THREE.Raycaster();
   private mouse = new THREE.Vector2();
   private controls: any;
@@ -61,11 +63,35 @@ export class Earth3D {
     this.createAtmosphere();
     this.createClouds();
     this.createSatellites();
+    this.createFactionVisualLayers(); // Initialize faction layers
     this.setupControls();
     this.setupEventListeners(container);
     this.animate();
   }
   
+  private createFactionVisualLayers() {
+    // Faction Influence Overlay (transparent sphere)
+    const overlayGeometry = new THREE.SphereGeometry(2.01, 32, 32); // Slightly above earth surface
+    // The material will be a canvas texture that gets updated
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024; // Texture resolution for influence map
+    canvas.height = 512;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+
+    const overlayMaterial = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      opacity: 0.3, // Adjust for desired visibility
+      side: THREE.DoubleSide, // Render both sides if needed
+    });
+    this.factionInfluenceOverlay = new THREE.Mesh(overlayGeometry, overlayMaterial);
+    this.scene.add(this.factionInfluenceOverlay);
+
+    // Add faction HQ layer to the scene
+    this.scene.add(this.factionHQLayer);
+  }
+
   private setupRenderer(container: HTMLElement) {
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -415,6 +441,12 @@ export class Earth3D {
     this.earth.rotation.y += 0.001;
     this.atmosphere.rotation.y += 0.001;
     this.clouds.rotation.y += 0.0012;
+    if (this.factionInfluenceOverlay) {
+      this.factionInfluenceOverlay.rotation.copy(this.earth.rotation);
+    }
+    if (this.factionHQLayer) {
+      this.factionHQLayer.rotation.copy(this.earth.rotation);
+    }
     
     // Update satellite positions
     this.satellites.forEach(satellite => {
@@ -443,8 +475,102 @@ export class Earth3D {
   
   public updateRegionData(regions: WorldRegion[]) {
     // Update region visualization based on game state
-    regions.forEach(region => {
-      // Add visual indicators for region health/status
+    // This could be expanded to show region-specific data markers if needed
+  }
+
+  public updateFactionData(factions: Faction[], regions: WorldRegion[]) {
+    if (!this.factionInfluenceOverlay) return;
+
+    const material = this.factionInfluenceOverlay.material as THREE.MeshBasicMaterial;
+    const canvas = material.map!.image as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear previous drawing
+
+    const imageData = ctx.createImageData(canvas.width, canvas.height);
+    const data = imageData.data;
+
+    const factionColors: Record<string, [number, number, number]> = {};
+    factions.forEach((faction, index) => {
+      // Generate a unique color for each faction (can be improved)
+      factionColors[faction.id] = [
+        (parseInt(faction.id.slice(-2), 16) * 5) % 255,
+        (faction.ideology.length * 30 + index * 40) % 255,
+        (faction.powerLevel * 2) % 255
+      ];
+    });
+
+    // Blend influences per pixel
+    for (let i = 0; i < canvas.width; i++) { // u (longitude)
+      for (let j = 0; j < canvas.height; j++) { // v (latitude)
+        const lon = (i / canvas.width) * 2 * Math.PI - Math.PI;
+        const lat = (j / canvas.height) * Math.PI - Math.PI / 2;
+
+        let rSum = 0, gSum = 0, bSum = 0, totalInfluenceAtPixel = 0;
+
+        regions.forEach(region => {
+          // Determine if pixel is within this region (simplified, needs better mapping)
+          // This is a very rough approximation. A proper UV to region mapping or SDF would be better.
+          const regionLon = region.x * Math.PI; // Assuming x,y are normalized lon/lat multipliers
+          const regionLat = region.y * (Math.PI / 2);
+          const dist = Math.sqrt(Math.pow(lon - regionLon, 2) + Math.pow(lat - regionLat, 2));
+
+          if (dist < 0.5) { // Pixel is "close" to region center
+             factions.forEach(faction => {
+              const influence = faction.influence.get(region.id) || 0;
+              if (influence > 0) {
+                const [r, g, b] = factionColors[faction.id];
+                const weight = influence / 100;
+                rSum += r * weight;
+                gSum += g * weight;
+                bSum += b * weight;
+                totalInfluenceAtPixel += weight;
+              }
+            });
+          }
+        });
+
+        const pixelIndex = (j * canvas.width + i) * 4;
+        if (totalInfluenceAtPixel > 0) {
+          data[pixelIndex] = rSum / totalInfluenceAtPixel;
+          data[pixelIndex + 1] = gSum / totalInfluenceAtPixel;
+          data[pixelIndex + 2] = bSum / totalInfluenceAtPixel;
+          data[pixelIndex + 3] = Math.min(255, totalInfluenceAtPixel * 100 + 50); // Alpha based on total influence
+        } else {
+          data[pixelIndex + 3] = 0; // Transparent if no influence
+        }
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+    material.map!.needsUpdate = true;
+
+    // Update HQ Markers
+    this.factionHQLayer.children.forEach(child => child.removeFromParent()); // Clear old markers
+    this.factionHQLayer.clear();
+
+    factions.forEach(faction => {
+      const hqRegion = regions.find(r => r.id === faction.headquartersRegion);
+      if (hqRegion) {
+        const color = new THREE.Color().fromArray(factionColors[faction.id].map(c => c/255));
+        const hqMarkerGeo = new THREE.ConeGeometry(0.05, 0.15, 8); // Cone for HQ
+        const hqMarkerMat = new THREE.MeshBasicMaterial({ color });
+        const hqMarker = new THREE.Mesh(hqMarkerGeo, hqMarkerMat);
+
+        const spherical = new THREE.Spherical().setFromCartesianCoords(
+          hqRegion.x * 2, // This x,y to 3D needs proper conversion based on how regions are defined
+          hqRegion.y * 2,
+          Math.sqrt(4 - (hqRegion.x*2)**2 - (hqRegion.y*2)**2) // Assuming x,y are on a sphere of radius 2
+        );
+        // A better way: convert region's representative lat/lon to Cartesian for sphere of radius 2.05
+        const cartesianPos = new THREE.Vector3().setFromSphericalCoords(
+            2.05, // radius slightly above Earth surface
+            Math.PI / 2 - (hqRegion.y * Math.PI / 2), // Convert normalized Y to latitude (phi)
+            hqRegion.x * Math.PI // Convert normalized X to longitude (theta)
+        );
+        hqMarker.position.copy(cartesianPos);
+        hqMarker.lookAt(this.earth.position); // Point cone away from Earth center
+        hqMarker.rotateX(Math.PI / 2); // Orient cone upwards
+        this.factionHQLayer.add(hqMarker);
+      }
     });
   }
   
@@ -462,13 +588,19 @@ export class Earth3D {
     
     this.scene.add(marker);
     this.eventMarkers.push(marker);
+
+    // Trigger particle effect for the event
+    this.createEventParticles(event.type, marker.position.clone());
     
-    // Remove after event duration
+    // Remove marker after event duration (visual only, actual event handled by engine)
     setTimeout(() => {
       this.scene.remove(marker);
+      // Ensure material and geometry are disposed if they are unique per marker
+      if (marker.material) (marker.material as THREE.Material).dispose();
+      if (marker.geometry) marker.geometry.dispose();
       const index = this.eventMarkers.indexOf(marker);
       if (index > -1) this.eventMarkers.splice(index, 1);
-    }, event.duration);
+    }, event.duration); // Match visual duration to game logic duration
   }
   
   private getEventColor(type: EventType): number {
@@ -480,9 +612,60 @@ export class Earth3D {
       [EventType.ROGUE_AI]: 0xff00ff,
       [EventType.SPACE_WEAPON]: 0xffffff,
       [EventType.HEALING]: 0x00ff88,
-      [EventType.ENVIRONMENTAL_RESTORATION]: 0x88ff00
+      [EventType.ENVIRONMENTAL_RESTORATION]: 0x88ff00,
+      // New Economic Event Colors
+      [EventType.TRADE_WAR]: 0xffaa00, // Orange/Yellow
+      [EventType.RESOURCE_DISCOVERY]: 0x00ffff, // Cyan
+      [EventType.ECONOMIC_RECESSION]: 0x808080, // Grey
+      [EventType.TECHNOLOGICAL_LEAP]: 0xaaaaff, // Light Blue/Purple
+      [EventType.GLOBAL_TRADE_DEAL]: 0x00aa00, // Green
     };
     return colors[type] || 0xffffff;
+  }
+
+  // Method to create specific particle effects for events (can be expanded)
+  private createEventParticles(type: EventType, position: THREE.Vector3) {
+    const particleCount = 50;
+    const particles = new THREE.BufferGeometry();
+    const pMaterial = new THREE.PointsMaterial({
+      color: this.getEventColor(type),
+      size: 0.05,
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      depthWrite: false,
+    });
+
+    const pVertices = [];
+    for (let i = 0; i < particleCount; i++) {
+      pVertices.push(position.x, position.y, position.z);
+    }
+    particles.setAttribute('position', new THREE.Float32BufferAttribute(pVertices, 3));
+
+    const particleSystem = new THREE.Points(particles, pMaterial);
+    this.scene.add(particleSystem);
+
+    // Animate particles
+    let_particle_life = 0;
+    const animateParticles = () => {
+      let_particle_life += 0.01;
+      const positions = particles.attributes.position.array as Float32Array;
+      for (let i = 0; i < particleCount; i++) {
+        positions[i * 3 + 0] += (Math.random() - 0.5) * 0.02;
+        positions[i * 3 + 1] += (Math.random() - 0.5) * 0.02;
+        positions[i * 3 + 2] += (Math.random() - 0.5) * 0.02;
+      }
+      particles.attributes.position.needsUpdate = true;
+      pMaterial.opacity = Math.max(0, 1 - let_particle_life * 2);
+
+      if (pMaterial.opacity > 0) {
+        requestAnimationFrame(animateParticles);
+      } else {
+        this.scene.remove(particleSystem);
+        particles.dispose();
+        pMaterial.dispose();
+      }
+    };
+    animateParticles();
   }
   
   public compromiseSatellite(satelliteId: string) {

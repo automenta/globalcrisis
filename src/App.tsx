@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { GameEngine, GameState, EventType, WorldRegion, RegionEvent } from './engine/GameEngine';
+import { GameEngine, GameState, EventType, WorldRegion, RegionEvent, Faction } from './engine/GameEngine';
 import { Earth3D, Satellite, ContextMenu as ContextMenuType } from './components/Earth3D';
 import { ContextMenu, TacticalOverlay } from './components/WarRoomUI';
 import { Button } from '@/components/ui/button';
@@ -168,10 +168,11 @@ export default function GlobalCrisisSimulator() {
         // Update 3D visualization
         if (earth3DRef.current) {
           earth3DRef.current.updateRegionData(newState.regions);
+          earth3DRef.current.updateFactionData(newState.factions, newState.regions);
           
           // Add new event markers
           newState.activeEvents.forEach(event => {
-            if (event.timeLeft === event.duration) {
+            if (event.timeLeft === event.duration) { // Check if it's a newly added event
               earth3DRef.current?.addEventMarker(event);
             }
           });
@@ -332,6 +333,7 @@ export default function GlobalCrisisSimulator() {
       {/* War Room Interface Overlay */}
       <TacticalOverlay
         gameState={gameState}
+        factions={gameState.factions} // Pass factions to TacticalOverlay
         onModeChange={handleModeChange}
         onSpeedChange={handleSpeedChange}
         onTogglePlay={handleTogglePlay}
