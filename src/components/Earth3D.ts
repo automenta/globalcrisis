@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { GameState, WorldRegion, RegionEvent, EventType } from '../engine/GameEngine';
+import { GameState, WorldRegion, RegionEvent, EventType, PlanetaryFacility } from '../engine/GameEngine'; // Added PlanetaryFacility
 
+// #region Interfaces & Types
 export type StandardSatelliteType = 'military' | 'communication' | 'surveillance' | 'weapon' | 'civilian';
-export type SpecialSatelliteType = 'geo_scanner' | 'emp_pulser'; // New types
+export type SpecialSatelliteType = 'geo_scanner' | 'emp_pulser';
 export type SatelliteType = StandardSatelliteType | SpecialSatelliteType;
 
 export interface Satellite {
@@ -16,7 +17,7 @@ export interface Satellite {
     phase: number;
   };
   position: THREE.Vector3;
-  mesh: THREE.Group; // Changed from THREE.Mesh to THREE.Group
+  mesh: THREE.Group;
   active: boolean;
   compromised: boolean;
 }
@@ -29,8 +30,10 @@ export interface ContextMenu {
   type: 'region' | 'satellite' | 'event';
   target: any;
 }
+// #endregion Interfaces & Types
 
 export class Earth3D {
+  // #region Class Properties
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
@@ -43,32 +46,34 @@ export class Earth3D {
   private facilityMarkers: THREE.Mesh[] = [];
   private raycaster = new THREE.Raycaster();
   private mouse = new THREE.Vector2();
-  // private controls: any; // Will replace with more integrated controls
   private animationId: number = 0;
 
   // Camera control parameters
   private isDragging = false;
   private previousMousePosition = { x: 0, y: 0 };
   private targetCameraPosition = new THREE.Vector3();
-  private targetFocusPoint = new THREE.Vector3(0, 0, 0); // What the camera should look at
-  private currentCameraDistance = 8; // Initial distance
-  private minZoomDistance = 0.1; // For close-up views (e.g., hexagon level)
-  private maxZoomDistance = 50;  // For planetary view
-  private zoomTarget: THREE.Object3D | null = null; // Optional object to focus on (e.g. selected hex)
+  private targetFocusPoint = new THREE.Vector3(0, 0, 0);
+  private currentCameraDistance = 8;
+  private minZoomDistance = 0.1;
+  private maxZoomDistance = 50;
+  private zoomTarget: THREE.Object3D | null = null;
 
+  // Callbacks for interactions
   public onRegionClick?: (region: WorldRegion, x: number, y: number) => void;
   public onSatelliteClick?: (satellite: Satellite, x: number, y: number) => void;
   public onEventClick?: (event: RegionEvent, x: number, y: number) => void;
   public onHexagonClick?: (hexagonId: string, hexagonCenter: THREE.Vector3, x: number, y: number) => void;
   
+  // Hexagon grid properties
   private hexagonGrid?: THREE.LineSegments;
   private hexagons: { id: string, center: THREE.Vector3, vertices: THREE.Vector3[] }[] = [];
   private selectedHexagonMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, side: THREE.DoubleSide });
   private selectedHexagonMesh?: THREE.Mesh;
-  private strategicResourceMarkers: THREE.Group = new THREE.Group(); // Group to hold resource icons/markers
+  private strategicResourceMarkers: THREE.Group = new THREE.Group();
   private resourceMarkerMaterials: Record<string, THREE.SpriteMaterial> = {};
+  // #endregion Class Properties
 
-
+  // #region Constructor & Core Setup
   constructor(container: HTMLElement) {
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 10000);
@@ -149,33 +154,9 @@ export class Earth3D {
   
   private createEarth() {
     const geometry = new THREE.SphereGeometry(2, 64, 64);
-    
-    // Create detailed earth material with multiple textures
-    const textureLoader = new THREE.TextureLoader();
-    
-    // We'll create procedural textures since we can't load external images
-    const canvas = document.createElement('canvas');
-    canvas.width = 1024;
-    canvas.height = 512;
-    const ctx = canvas.getContext('2d')!;
-    
-    // Create earth-like texture procedurally
-    this.createEarthTexture(ctx, canvas.width, canvas.height);
-    const earthTexture = new THREE.CanvasTexture(canvas);
-    earthTexture.wrapS = THREE.RepeatWrapping;
-    earthTexture.wrapT = THREE.RepeatWrapping;
-    
-    // Create normal map
-    const normalCanvas = document.createElement('canvas');
-    normalCanvas.width = 512;
-    normalCanvas.height = 256;
-    const normalCtx = normalCanvas.getContext('2d')!;
-    this.createNormalMap(normalCtx, normalCanvas.width, normalCanvas.height);
-    const normalTexture = new THREE.CanvasTexture(normalCanvas);
-    
     const material = new THREE.MeshPhongMaterial({
-      map: earthTexture,
-      normalMap: normalTexture,
+      map: this._createProceduralTexture(this.createEarthTexture),
+      normalMap: this._createProceduralTexture(this.createNormalMap, 512, 256),
       shininess: 0.1,
       transparent: false
     });
@@ -186,108 +167,6 @@ export class Earth3D {
     this.scene.add(this.earth);
   }
   
-  private createEarthTexture(ctx: CanvasRenderingContext2D, width: number, height: number) {
-    // Create a procedural earth-like texture
-    const imageData = ctx.createImageData(width, height);
-    const data = imageData.data;
-    
-    for (let i = 0; i < width; i++) {
-      for (let j = 0; j < height; j++) {
-        const index = (j * width + i) * 4;
-        
-        // Convert to lat/lon
-        const lon = (i / width) * 2 * Math.PI - Math.PI;
-        const lat = (j / height) * Math.PI - Math.PI / 2;
-        
-        // Noise for terrain
-        const noise1 = Math.sin(lat * 8) * Math.cos(lon * 6);
-        const noise2 = Math.sin(lat * 16) * Math.cos(lon * 12) * 0.5;
-        const elevation = noise1 + noise2;
-        
-        if (elevation > 0.2) {
-          // Land - browns and greens
-          data[index] = 34 + Math.random() * 40;     // R
-          data[index + 1] = 80 + Math.random() * 60; // G
-          data[index + 2] = 20 + Math.random() * 30; // B
-        } else {
-          // Ocean - blues
-          data[index] = 10 + Math.random() * 20;     // R
-          data[index + 1] = 50 + Math.random() * 40; // G
-          data[index + 2] = 120 + Math.random() * 80; // B
-        }
-        data[index + 3] = 255; // A
-      }
-    }
-    
-    ctx.putImageData(imageData, 0, 0);
-  }
-  
-  private createNormalMap(ctx: CanvasRenderingContext2D, width: number, height: number) {
-    const imageData = ctx.createImageData(width, height);
-    const data = imageData.data;
-
-    // Re-generate elevation data using the same noise parameters as in createEarthTexture
-    // This is a simplified approach. Ideally, pass elevation data or use a shared noise function.
-    const elevations: number[][] = Array(height).fill(0).map(() => Array(width).fill(0));
-
-    const simpleNoise = (x: number, y: number, scale: number, octaves: number, persistence: number) => {
-      let total = 0;
-      let frequency = scale;
-      let amplitude = 1;
-      let maxValue = 0;
-      for (let i = 0; i < octaves; i++) {
-        total += Math.sin(x * frequency) * Math.cos(y * frequency) * amplitude;
-        maxValue += amplitude;
-        amplitude *= persistence;
-        frequency *= 2;
-      }
-      return total / maxValue;
-    };
-
-    for (let j = 0; j < height; j++) {
-      for (let i = 0; i < width; i++) {
-        const u = i / width;
-        const v = j / height;
-        const nx = u * 20;
-        const ny = v * 10;
-        let elevation = simpleNoise(nx, ny, 0.5, 4, 0.5);
-        elevation += Math.sin(u * Math.PI * 2) * 0.3;
-        elevation += Math.cos(v * Math.PI * 3) * 0.2;
-        elevations[j][i] = (elevation + 1) / 2; // Store normalized elevation
-      }
-    }
-
-    const strength = 5.0; // Strength of the normal map effect
-
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const index = (y * width + x) * 4;
-
-        // Sobel filter or similar to get height differences
-        const tl = elevations[Math.max(0, y - 1)][Math.max(0, x - 1)]; // Top-left
-        const t  = elevations[Math.max(0, y - 1)][x];                   // Top
-        const tr = elevations[Math.max(0, y - 1)][Math.min(width - 1, x + 1)]; // Top-right
-        const l  = elevations[y][Math.max(0, x - 1)];                   // Left
-        const r  = elevations[y][Math.min(width - 1, x + 1)];           // Right
-        const bl = elevations[Math.min(height - 1, y + 1)][Math.max(0, x - 1)]; // Bottom-left
-        const b  = elevations[Math.min(height - 1, y + 1)][x];                   // Bottom
-        const br = elevations[Math.min(height - 1, y + 1)][Math.min(width - 1, x + 1)]; // Bottom-right
-
-        // Sobel operator
-        const dX = (tr + 2 * r + br) - (tl + 2 * l + bl);
-        const dY = (bl + 2 * b + br) - (tl + 2 * t + tr);
-
-        const normal = new THREE.Vector3(-dX * strength, -dY * strength, 1.0).normalize();
-
-        data[index] = (normal.x * 0.5 + 0.5) * 255;     // R
-        data[index + 1] = (normal.y * 0.5 + 0.5) * 255; // G
-        data[index + 2] = normal.z * 255;               // B: Z is usually up (blue)
-        data[index + 3] = 255;                          // A
-      }
-    }
-    ctx.putImageData(imageData, 0, 0);
-  }
-  
   private createAtmosphere() {
     const geometry = new THREE.SphereGeometry(2.05, 32, 32);
     const material = new THREE.MeshBasicMaterial({
@@ -296,87 +175,134 @@ export class Earth3D {
       opacity: 0.15,
       side: THREE.BackSide
     });
-    
     this.atmosphere = new THREE.Mesh(geometry, material);
     this.scene.add(this.atmosphere);
   }
-  
+
   private createClouds() {
     const geometry = new THREE.SphereGeometry(2.02, 32, 32);
-    
-    // Create procedural cloud texture
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 256;
-    const ctx = canvas.getContext('2d')!;
-    this.createCloudTexture(ctx, canvas.width, canvas.height);
-    const cloudTexture = new THREE.CanvasTexture(canvas);
-    
     const material = new THREE.MeshBasicMaterial({
-      map: cloudTexture,
+      map: this._createProceduralTexture(this.createCloudTexture), // Use helper
       transparent: true,
       opacity: 0.4
     });
-    
     this.clouds = new THREE.Mesh(geometry, material);
     this.scene.add(this.clouds);
   }
-  
-  private createCloudTexture(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  // #endregion Celestial Body Creation
+
+  // #region Procedural Texture Generation
+  /** Helper to reduce boilerplate for creating canvas-based textures. */
+  private _createProceduralTexture(
+    painter: (ctx: CanvasRenderingContext2D, width: number, height: number) => void,
+    width: number = 1024, // Default width for general textures
+    height: number = 512  // Default height for general textures
+  ): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Failed to get 2D context from canvas');
+    }
+    painter(ctx, width, height);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping; // Default wrapping
+    texture.wrapT = THREE.RepeatWrapping; // Default wrapping
+    return texture;
+  }
+
+  private createEarthTexture(ctx: CanvasRenderingContext2D, width: number, height: number) {
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
+    for (let i = 0; i < width; i++) {
+      for (let j = 0; j < height; j++) {
+        const index = (j * width + i) * 4;
+        const lon = (i / width) * 2 * Math.PI - Math.PI;
+        const lat = (j / height) * Math.PI - Math.PI / 2;
+        const noise1 = Math.sin(lat * 8) * Math.cos(lon * 6);
+        const noise2 = Math.sin(lat * 16) * Math.cos(lon * 12) * 0.5;
+        const elevation = noise1 + noise2;
+        if (elevation > 0.2) { // Land
+          data[index] = 34 + Math.random() * 40; data[index + 1] = 80 + Math.random() * 60; data[index + 2] = 20 + Math.random() * 30;
+        } else { // Ocean
+          data[index] = 10 + Math.random() * 20; data[index + 1] = 50 + Math.random() * 40; data[index + 2] = 120 + Math.random() * 80;
+        }
+        data[index + 3] = 255;
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }
 
-    // Simple pseudo-random noise function (can be the same as used for Earth texture)
+  private createNormalMap(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    const imageData = ctx.createImageData(width, height);
+    const data = imageData.data;
+    const elevations: number[][] = Array(height).fill(0).map(() => Array(width).fill(0));
+    // Simple noise function for elevation simulation
     const simpleNoise = (x: number, y: number, scale: number, octaves: number, persistence: number) => {
-      let total = 0;
-      let frequency = scale;
-      let amplitude = 1;
-      let maxValue = 0;
+      let total = 0, frequency = scale, amplitude = 1, maxValue = 0;
       for (let i = 0; i < octaves; i++) {
-        // Using different trig functions or offsets to vary from earth texture noise
-        total += Math.cos(x * frequency + i * 0.5) * Math.sin(y * frequency + i * 0.3) * amplitude;
-        maxValue += amplitude;
-        amplitude *= persistence;
-        frequency *= 2;
+        total += Math.sin(x * frequency) * Math.cos(y * frequency) * amplitude;
+        maxValue += amplitude; amplitude *= persistence; frequency *= 2;
       }
       return total / maxValue;
     };
-
-    for (let j = 0; j < height; j++) { // y
-      for (let i = 0; i < width; i++) { // x
-        const index = (j * width + i) * 4;
-        
-        const u = i / width;
-        const v = j / height;
-
-        // Sample noise at a couple of different scales (frequencies)
-        const noiseVal1 = (simpleNoise(u * 10, v * 5, 1, 3, 0.5) + 1) / 2; // Base cloud shapes (0-1)
-        const noiseVal2 = (simpleNoise(u * 25, v * 12, 1, 4, 0.4) + 1) / 2; // Finer details (0-1)
-
-        let cloudAlpha = 0;
-        const baseCloudCoverage = 0.4; // Determines how much of the globe is covered
-        
-        // Combine noise values: make clouds where noiseVal1 is high, add detail with noiseVal2
-        if (noiseVal1 > (1 - baseCloudCoverage)) {
-            // Modulate by noiseVal2 to create variation and wispiness
-            cloudAlpha = (noiseVal1 - (1- baseCloudCoverage)) / baseCloudCoverage; // Intensity of main cloud
-            cloudAlpha *= (0.5 + noiseVal2 * 0.5); // Add finer detail, make it less uniform
-            cloudAlpha = Math.pow(cloudAlpha, 1.5); // Increase contrast a bit
-        }
-        
-        cloudAlpha = Math.max(0, Math.min(1, cloudAlpha)); // Clamp to 0-1
-
-        const cloudBrightness = 230 + Math.random() * 25; // Slight brightness variation
-
-        data[index] = cloudBrightness;     // R
-        data[index + 1] = cloudBrightness; // G
-        data[index + 2] = cloudBrightness; // B
-        data[index + 3] = cloudAlpha * 255; // Alpha controls cloud density/visibility
+    for (let j = 0; j < height; j++) {
+      for (let i = 0; i < width; i++) {
+        const u = i / width, v = j / height, nx = u * 20, ny = v * 10;
+        let elevation = simpleNoise(nx, ny, 0.5, 4, 0.5);
+        elevation += Math.sin(u * Math.PI * 2) * 0.3; elevation += Math.cos(v * Math.PI * 3) * 0.2;
+        elevations[j][i] = (elevation + 1) / 2;
       }
     }
-    
+    const strength = 5.0; // Controls the intensity of the normal map
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const index = (y * width + x) * 4;
+        // Sobel filter for edge detection (approximating derivatives)
+        const tl = elevations[Math.max(0, y - 1)][Math.max(0, x - 1)], t  = elevations[Math.max(0, y - 1)][x], tr = elevations[Math.max(0, y - 1)][Math.min(width - 1, x + 1)];
+        const l  = elevations[y][Math.max(0, x - 1)], r  = elevations[y][Math.min(width - 1, x + 1)];
+        const bl = elevations[Math.min(height - 1, y + 1)][Math.max(0, x - 1)], b  = elevations[Math.min(height - 1, y + 1)][x], br = elevations[Math.min(height - 1, y + 1)][Math.min(width - 1, x + 1)];
+        const dX = (tr + 2 * r + br) - (tl + 2 * l + bl), dY = (bl + 2 * b + br) - (tl + 2 * t + tr);
+        const normal = new THREE.Vector3(-dX * strength, -dY * strength, 1.0).normalize();
+        data[index] = (normal.x * 0.5 + 0.5) * 255; data[index + 1] = (normal.y * 0.5 + 0.5) * 255; data[index + 2] = normal.z * 255; data[index + 3] = 255;
+      }
+    }
     ctx.putImageData(imageData, 0, 0);
   }
+
+  private createCloudTexture(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    const imageData = ctx.createImageData(width, height);
+    const data = imageData.data;
+    // Another simple noise function for clouds
+    const simpleNoise = (x: number, y: number, scale: number, octaves: number, persistence: number) => {
+      let total = 0, frequency = scale, amplitude = 1, maxValue = 0;
+      for (let i = 0; i < octaves; i++) {
+        total += Math.cos(x * frequency + i * 0.5) * Math.sin(y * frequency + i * 0.3) * amplitude;
+        maxValue += amplitude; amplitude *= persistence; frequency *= 2;
+      }
+      return total / maxValue;
+    };
+    for (let j = 0; j < height; j++) {
+      for (let i = 0; i < width; i++) {
+        const index = (j * width + i) * 4;
+        const u = i / width, v = j / height;
+        const noiseVal1 = (simpleNoise(u * 10, v * 5, 1, 3, 0.5) + 1) / 2;
+        const noiseVal2 = (simpleNoise(u * 25, v * 12, 1, 4, 0.4) + 1) / 2;
+        let cloudAlpha = 0; const baseCloudCoverage = 0.4;
+        if (noiseVal1 > (1 - baseCloudCoverage)) {
+          cloudAlpha = (noiseVal1 - (1- baseCloudCoverage)) / baseCloudCoverage;
+          cloudAlpha *= (0.5 + noiseVal2 * 0.5); cloudAlpha = Math.pow(cloudAlpha, 1.5);
+        }
+        cloudAlpha = Math.max(0, Math.min(1, cloudAlpha));
+        const cloudBrightness = 230 + Math.random() * 25;
+        data[index] = cloudBrightness; data[index + 1] = cloudBrightness; data[index + 2] = cloudBrightness;
+        data[index + 3] = cloudAlpha * 255;
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }
+  // #endregion Procedural Texture Generation
   
   private createSatellites() {
     const satelliteTypes: { type: SatelliteType, count: number, color: number, radius: number }[] = [
@@ -496,163 +422,99 @@ export class Earth3D {
     this.targetCameraPosition.copy(this.camera.position);
     this.currentCameraDistance = this.camera.position.length();
 
-    this.renderer.domElement.addEventListener('mousedown', (event) => {
-      if (event.button === 0) { // Left mouse button
-        this.isDragging = true;
-        this.previousMousePosition.x = event.clientX;
-        this.previousMousePosition.y = event.clientY;
-      }
-    });
-    
-    this.renderer.domElement.addEventListener('mousemove', (event) => {
+    const onMouseDown = (event: MouseEvent) => {
+      if (event.button === 0) { this.isDragging = true; this.previousMousePosition = { x: event.clientX, y: event.clientY }; }
+    };
+    const onMouseMove = (event: MouseEvent) => {
       if (this.isDragging) {
-        const deltaMove = {
-          x: event.clientX - this.previousMousePosition.x,
-          y: event.clientY - this.previousMousePosition.y
-        };
-        
-        // Create a quaternion for rotation based on mouse movement
+        const deltaMove = { x: event.clientX - this.previousMousePosition.x, y: event.clientY - this.previousMousePosition.y };
         const rotationSpeed = 0.005;
-        const deltaRotationQuaternion = new THREE.Quaternion()
-          .setFromEuler(new THREE.Euler(
-            deltaMove.y * rotationSpeed,
-            deltaMove.x * rotationSpeed,
-            0,
-            'XYZ' // Order of rotation
-          ));
-        
-        // Apply this rotation to the target camera position relative to the target focus point
-        this.targetCameraPosition.sub(this.targetFocusPoint);
-        this.targetCameraPosition.applyQuaternion(deltaRotationQuaternion);
-        this.targetCameraPosition.add(this.targetFocusPoint);
-
-        // Also rotate the earth group if we are not focused on a specific target
-        if (!this.zoomTarget) {
-            // This part needs careful consideration:
-            // Rotating the Earth itself vs. just moving the camera around it.
-            // For a typical orbit control, the camera moves. The Earth might have its own axial tilt and rotation.
-            // Let's assume camera moves around a fixed (or slowly rotating) earth for now.
-            // The earth's own rotation is handled in the animate loop.
-            // This drag should rotate our view around the earth.
-        }
-
-        this.previousMousePosition.x = event.clientX;
-        this.previousMousePosition.y = event.clientY;
+        const deltaRotationQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(deltaMove.y * rotationSpeed, deltaMove.x * rotationSpeed, 0, 'XYZ'));
+        this.targetCameraPosition.sub(this.targetFocusPoint).applyQuaternion(deltaRotationQuaternion).add(this.targetFocusPoint);
+        this.previousMousePosition = { x: event.clientX, y: event.clientY };
       }
-    });
-    
-    this.renderer.domElement.addEventListener('mouseup', (event) => {
-      if (event.button === 0) {
-        this.isDragging = false;
-      }
-    });
-
-    this.renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault()); // Prevent context menu on right click
-
-    this.renderer.domElement.addEventListener('dblclick', (event) => {
-      // Check if the double click was on the Earth or empty space
-      this.mouse.x = (event.clientX / this.renderer.domElement.clientWidth) * 2 - 1;
-      this.mouse.y = -(event.clientY / this.renderer.domElement.clientHeight) * 2 + 1;
+    };
+    const onMouseUp = (event: MouseEvent) => { if (event.button === 0) this.isDragging = false; };
+    const onContextMenu = (event: MouseEvent) => event.preventDefault();
+    const onDoubleClick = (event: MouseEvent) => {
+      this.mouse.set((event.clientX / this.renderer.domElement.clientWidth) * 2 - 1, -(event.clientY / this.renderer.domElement.clientHeight) * 2 + 1);
       this.raycaster.setFromCamera(this.mouse, this.camera);
-
-      const intersects = this.raycaster.intersectObject(this.earth);
-      const satelliteIntersects = this.raycaster.intersectObjects(this.satellites.map(s => s.mesh));
-
-
-      if (intersects.length > 0 || satelliteIntersects.length === 0) { // Clicked on earth or empty space
-        // Zoom out to planetary view
-        this.zoomToTarget(new THREE.Vector3(0, 0, 0), this.maxZoomDistance / 2); // Or a default planetary distance
-        this.zoomTarget = null;
-        this.highlightHexagon(null); // Clear selection
+      const intersectsEarth = this.raycaster.intersectObject(this.earth).length > 0;
+      const intersectsSatellite = this.raycaster.intersectObjects(this.satellites.map(s => s.mesh)).length > 0;
+      if (intersectsEarth || !intersectsSatellite) {
+        this.zoomToTarget(new THREE.Vector3(0, 0, 0), this.maxZoomDistance / 2); this.zoomTarget = null; this.highlightHexagon(null);
       }
-      // If double-clicked on a satellite or other specific object, could have different behavior.
-    });
-
-    this.renderer.domElement.addEventListener('wheel', (event) => {
+    };
+    const onWheel = (event: WheelEvent) => {
       event.preventDefault();
-      const zoomSpeed = 0.1;
-      const zoomDirection = event.deltaY > 0 ? 1 : -1;
-
-      // Calculate new distance
+      const zoomSpeed = 0.1; const zoomDirection = event.deltaY > 0 ? 1 : -1;
       let newDistance = this.currentCameraDistance * (1 + zoomDirection * zoomSpeed);
       newDistance = Math.max(this.minZoomDistance, Math.min(this.maxZoomDistance, newDistance));
-
       this.currentCameraDistance = newDistance;
-
-      // Update target camera position based on new distance along the view vector
       const direction = new THREE.Vector3().subVectors(this.targetCameraPosition, this.targetFocusPoint).normalize();
       this.targetCameraPosition.copy(this.targetFocusPoint).addScaledVector(direction, this.currentCameraDistance);
+    };
 
-    }, { passive: false }); // passive:false to allow preventDefault
+    this.renderer.domElement.addEventListener('mousedown', onMouseDown);
+    this.renderer.domElement.addEventListener('mousemove', onMouseMove);
+    this.renderer.domElement.addEventListener('mouseup', onMouseUp);
+    this.renderer.domElement.addEventListener('contextmenu', onContextMenu);
+    this.renderer.domElement.addEventListener('dblclick', onDoubleClick);
+    this.renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
   }
   
-  private setupEventListeners(container: HTMLElement) {
-    this.renderer.domElement.addEventListener('click', (event) => {
-      this.mouse.x = (event.clientX / container.clientWidth) * 2 - 1;
-      this.mouse.y = -(event.clientY / container.clientHeight) * 2 + 1;
-      
+  private setupEventListeners(container: HTMLElement) { // container might not be needed if renderer.domElement is used
+    const onClick = (event: MouseEvent) => {
+      this.mouse.set((event.clientX / this.renderer.domElement.clientWidth) * 2 - 1, -(event.clientY / this.renderer.domElement.clientHeight) * 2 + 1);
       this.raycaster.setFromCamera(this.mouse, this.camera);
-      
-      // Check satellite intersections
-      const satelliteMeshes = this.satellites.map(s => s.mesh);
-      const satelliteIntersects = this.raycaster.intersectObjects(satelliteMeshes);
-      
+
+      const satelliteIntersects = this.raycaster.intersectObjects(this.satellites.map(s => s.mesh), true); // Added recursive true
       if (satelliteIntersects.length > 0) {
-        const satellite = this.satellites.find(s => s.mesh === satelliteIntersects[0].object);
-        if (satellite && this.onSatelliteClick) {
-          this.onSatelliteClick(satellite, event.clientX, event.clientY);
+        let clickedSatelliteObject = satelliteIntersects[0].object;
+        // Traverse up to find the parent Group that is the satellite's mesh
+        while(clickedSatelliteObject.parent && clickedSatelliteObject.parent !== this.scene) {
+            if (this.satellites.some(s => s.mesh === clickedSatelliteObject)) {
+                break;
+            }
+            clickedSatelliteObject = clickedSatelliteObject.parent;
         }
-        return;
+        const satellite = this.satellites.find(s => s.mesh === clickedSatelliteObject);
+        if (satellite && this.onSatelliteClick) { this.onSatelliteClick(satellite, event.clientX, event.clientY); return; }
       }
-      
-      // Check earth intersections for regions
+
       const earthIntersects = this.raycaster.intersectObject(this.earth);
       if (earthIntersects.length > 0) {
         const intersectPoint = earthIntersects[0].point;
-
-        // Try to find a hexagon first
         const hexagon = this.getHexagonFromPoint(intersectPoint);
         if (hexagon) {
           this.highlightHexagon(hexagon);
-          // Auto-zoom to selected hexagon
-          const hexViewDistance = 0.5; // Adjust this for desired closeness to hexagon
-          this.zoomToTarget(hexagon.center, hexViewDistance);
-          this.zoomTarget = this.selectedHexagonMesh; // Set the focused object
-
-          if (this.onHexagonClick) {
-            this.onHexagonClick(hexagon.id, hexagon.center, event.clientX, event.clientY);
-          }
+          this.zoomToTarget(hexagon.center, 0.5);
+          this.zoomTarget = this.selectedHexagonMesh;
+          if (this.onHexagonClick) { this.onHexagonClick(hexagon.id, hexagon.center, event.clientX, event.clientY); }
         } else {
-          // Fallback to region click if no specific hexagon is identified
-          // Or if clicking on empty globe space, maybe zoom out or clear target
-          this.zoomTarget = null;
-          // Or if you want to clear hexagon selection when clicking elsewhere on globe:
-          this.highlightHexagon(null);
+          this.zoomTarget = null; this.highlightHexagon(null);
           const region = this.getRegionFromPoint(intersectPoint);
-          if (region && this.onRegionClick) {
-            this.onRegionClick(region, event.clientX, event.clientY);
-          }
+          if (region && this.onRegionClick) { this.onRegionClick(region, event.clientX, event.clientY); }
         }
       } else {
-         // Clicked outside the earth, clear hexagon selection
         this.highlightHexagon(null);
       }
-    });
+    };
+    this.renderer.domElement.addEventListener('click', onClick);
   }
   
   private getRegionFromPoint(point: THREE.Vector3): WorldRegion | null {
-    // Convert 3D point to lat/lon and determine region
-    const lat = Math.asin(point.y / 2);
+    // Convert 3D point to normalized lat/lon. Earth radius is 2.
+    // Note: This is a simplified mapping and might not accurately reflect complex region boundaries.
+    // A more robust solution would involve point-in-polygon tests on spherical polygons
+    // or using a library for geopolitical data.
+    const lat = Math.asin(point.y / this.earth.geometry.parameters.radius); // Use actual radius for accuracy
     const lon = Math.atan2(point.z, point.x);
     
-    // Simple region mapping based on coordinates
-    if (lon < -Math.PI/3 && lon > -2*Math.PI/3 && lat > 0) return { id: 'na', name: 'North America' } as WorldRegion;
-    if (lon < -Math.PI/6 && lon > -Math.PI/2 && lat < 0) return { id: 'sa', name: 'South America' } as WorldRegion;
-    if (lon > -Math.PI/6 && lon < Math.PI/3 && lat > 0) return { id: 'eu', name: 'Europe' } as WorldRegion;
-    if (lon > -Math.PI/6 && lon < Math.PI/3 && lat < 0) return { id: 'af', name: 'Africa' } as WorldRegion;
-    if (lon > Math.PI/3) return { id: 'as', name: 'Asia' } as WorldRegion;
-    if (lon < -2*Math.PI/3 && lat < -Math.PI/6) return { id: 'oc', name: 'Oceania' } as WorldRegion;
-    
+    // Example simplified region mapping (adjust thresholds as needed)
+    // These would need to be defined based on the game's specific map and region definitions.
+    if (lon > -Math.PI * 2/3 && lon < -Math.PI / 3 && lat > 0) return { id: 'na', name: 'North America' } as WorldRegion; // Placeholder
+    // ... add other region definitions here ...
     return null;
   }
   
@@ -741,370 +603,6 @@ export class Earth3D {
     this.renderer.render(this.scene, this.camera);
   };
 
-  public zoomToTarget(targetPointOnGlobe: THREE.Vector3, distance: number, instant: boolean = false) {
-    this.targetFocusPoint.copy(targetPointOnGlobe);
-
-    // Calculate the direction from the target point back to the current camera position (or a default direction)
-    // This maintains the current viewing angle if possible, or resets to a sensible default.
-    let direction = new THREE.Vector3().subVectors(this.camera.position, this.targetFocusPoint).normalize();
-
-    // If the direction is zero (e.g., camera is already AT the targetFocusPoint, highly unlikely for different points)
-    // or if the new target is very different, we might want a default orientation.
-    // For instance, always look "down" from a point directly above the target.
-    if (direction.lengthSq() < 0.001) {
-      // Default direction: from directly above the target point, relative to globe center
-      direction.copy(targetPointOnGlobe).normalize();
-    }
-
-    this.targetCameraPosition.copy(this.targetFocusPoint).addScaledVector(direction, distance);
-    this.currentCameraDistance = distance; // Update the stored distance
-
-    if (instant) {
-      this.camera.position.copy(this.targetCameraPosition);
-      this.camera.lookAt(this.targetFocusPoint);
-    }
-    // The animate loop will handle smooth transition if not instant
-  }
-
-  // Helper to set original color for restoration
-  private setOriginalColor(mesh: THREE.Mesh, color: number) {
-    mesh.userData.originalColor = color;
-    mesh.userData.isPrimaryColorPart = true;
-  }
-
-  private createHexagonGridData(detail: number = 2) {
-    const earthRadius = 2; // Must match earth sphere geometry radius
-    const icosahedron = new THREE.IcosahedronGeometry(earthRadius, detail);
-    const vertices = icosahedron.attributes.position;
-    const uniqueVertices = new Map<string, THREE.Vector3>();
-
-    for (let i = 0; i < vertices.count; i++) {
-      const x = vertices.getX(i);
-      const y = vertices.getY(i);
-      const z = vertices.getZ(i);
-      const key = `${x.toFixed(5)},${y.toFixed(5)},${z.toFixed(5)}`;
-      if (!uniqueVertices.has(key)) {
-        uniqueVertices.set(key, new THREE.Vector3(x, y, z));
-      }
-    }
-
-    let hexId = 0;
-    uniqueVertices.forEach(vertex => {
-      // For a true hexagonal grid, we'd need dual polyhedron (truncated icosahedron)
-      // or more complex sphere tiling algorithms (e.g., Voronoi on sphere).
-      // As a simplification, we'll consider each vertex of the subdivided icosahedron
-      // as a "center" of a conceptual tile/hexagon.
-      // The "vertices" of this hexagon would then be derived, e.g., by finding midpoints
-      // to adjacent uniqueVertices or using a fixed angular distance.
-      // This is a placeholder for a more robust hex generation.
-
-      // Placeholder for actual hexagon vertices - for now, just use the center.
-      // A real implementation would calculate 6 surrounding points on the sphere.
-      const placeholderHexVertices: THREE.Vector3[] = [];
-      const numSides = 6;
-      const angleStep = (Math.PI * 2) / numSides;
-      const arbitraryNormal = vertex.clone().cross(new THREE.Vector3(0,1,0)).normalize(); // An arbitrary tangent
-      if (arbitraryNormal.lengthSq() === 0) arbitraryNormal.set(1,0,0); // Handle case where vertex is (0,1,0)
-
-      const tangent = arbitraryNormal;
-      const bitangent = vertex.clone().cross(tangent).normalize();
-
-      // Approximate size of hexagon - this is tricky and depends on subdivision level
-      const hexRadius = earthRadius * (Math.PI / (10 * (detail + 1))); // very rough approximation
-
-      for(let i=0; i<numSides; ++i) {
-        const angle = i * angleStep;
-        const displacedPoint = tangent.clone().multiplyScalar(Math.cos(angle) * hexRadius)
-                                .add(bitangent.clone().multiplyScalar(Math.sin(angle) * hexRadius));
-        const hexVertex = vertex.clone().add(displacedPoint).normalize().multiplyScalar(earthRadius + 0.001); // slightly above surface
-        placeholderHexVertices.push(hexVertex);
-      }
-
-
-      this.hexagons.push({
-        id: `hex_${hexId++}`,
-        center: vertex.clone().normalize().multiplyScalar(earthRadius + 0.001), // Ensure it's on the surface for picking
-        vertices: placeholderHexVertices, // These would define the hexagon shape
-      });
-    });
-    icosahedron.dispose();
-  }
-
-  private visualizeHexagonGrid() {
-    if (this.hexagonGrid) {
-      this.scene.remove(this.hexagonGrid);
-      this.hexagonGrid.geometry.dispose();
-      (this.hexagonGrid.material as THREE.Material).dispose();
-    }
-
-    const points = [];
-    this.hexagons.forEach(hex => {
-      // To draw lines for hexagons, we need proper vertices for each hex.
-      // The current placeholder `hex.vertices` is a rough approximation.
-      // For simplicity, let's draw a small marker at each hex center for now,
-      // or if vertices are somewhat valid, draw edges.
-      if (hex.vertices.length === 6) {
-        for (let i = 0; i < hex.vertices.length; i++) {
-          points.push(hex.vertices[i]);
-          points.push(hex.vertices[(i + 1) % hex.vertices.length]);
-        }
-      } else { // Fallback: draw a small cross or dot at the center
-        const center = hex.center;
-        const d = 0.02; // size of marker
-        points.push(center.clone().add(new THREE.Vector3(-d,0,0)));
-        points.push(center.clone().add(new THREE.Vector3(d,0,0)));
-        points.push(center.clone().add(new THREE.Vector3(0,-d,0)));
-        points.push(center.clone().add(new THREE.Vector3(0,d,0)));
-      }
-    });
-
-    if (points.length === 0) return;
-
-    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    const material = new THREE.LineBasicMaterial({
-      color: 0xffffff,  // White grid lines
-      transparent: true,
-      opacity: 0.15 // Make them subtle
-    });
-
-    this.hexagonGrid = new THREE.LineSegments(geometry, material);
-    this.hexagonGrid.name = "HexagonGrid";
-    this.scene.add(this.hexagonGrid);
-  }
-
-  private getHexagonFromPoint(pointOnSphere: THREE.Vector3): { id: string, center: THREE.Vector3, vertices: THREE.Vector3[] } | null {
-    if (this.hexagons.length === 0) return null;
-
-    let closestHex = null;
-    let minDistanceSq = Infinity;
-
-    // Normalize the point on sphere to match hexagon center altitudes if necessary
-    // (currently they should both be at earthRadius + 0.001)
-    const normalizedPoint = pointOnSphere.clone().normalize().multiplyScalar(this.earth.geometry.parameters.radius + 0.001);
-
-
-    this.hexagons.forEach(hex => {
-      const distanceSq = hex.center.distanceToSquared(normalizedPoint);
-      if (distanceSq < minDistanceSq) {
-        minDistanceSq = distanceSq;
-        closestHex = hex;
-      }
-    });
-
-    // Add a threshold to ensure the click is reasonably close to a center
-    // This threshold depends on the density of your grid.
-    // For an icosahedron subdivision, distance between centers is somewhat regular.
-    // Let's say if it's further than an approximate hex radius, it's not a valid click.
-    // This needs tuning based on `detail` level.
-    const approxHexRadiusSq = Math.pow( (this.earth.geometry.parameters.radius * Math.PI) / (10 * (2+1) * 2), 2); // very rough
-    if (minDistanceSq > approxHexRadiusSq * 2) { // Heuristic, may need adjustment
-       // console.log("Clicked too far from any hex center", minDistanceSq, approxHexRadiusSq);
-       // return null;
-    }
-
-
-    return closestHex;
-  }
-
-  public highlightHexagon(hex: { id: string, center: THREE.Vector3, vertices: THREE.Vector3[] } | null) {
-    if (!this.selectedHexagonMesh) { // Ensure selectedHexagonMesh is created if it doesn't exist
-      const initialGeometry = new THREE.BufferGeometry(); // Empty initially
-      const initialGeometry = new THREE.BufferGeometry();
-      this.selectedHexagonMesh = new THREE.Mesh(initialGeometry, this.selectedHexagonMaterial);
-      this.selectedHexagonMesh.name = "SelectedHexagon";
-      this.selectedHexagonMesh.visible = false;
-      this.scene.add(this.selectedHexagonMesh);
-    }
-
-    if (hex && hex.vertices.length === 6 && this.selectedHexagonMesh) { // Check if selectedHexagonMesh exists
-      const vertices = [];
-      for (let i = 0; i < hex.vertices.length; ++i) {
-        vertices.push(hex.vertices[i].x, hex.vertices[i].y, hex.vertices[i].z);
-      }
-
-      const indices = [];
-      // Create a triangle fan for the hexagon face (assuming convex and ordered vertices)
-      for (let i = 1; i < hex.vertices.length - 1; i++) {
-        indices.push(0, i, i + 1);
-      }
-
-      // Update geometry
-      this.selectedHexagonMesh.geometry.dispose(); // Dispose old geometry attributes
-      const newGeometry = new THREE.BufferGeometry();
-      newGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-      newGeometry.setIndex(indices);
-      // newGeometry.computeVertexNormals(); // Not strictly necessary for MeshBasicMaterial without lighting
-
-      this.selectedHexagonMesh.geometry = newGeometry;
-      this.selectedHexagonMesh.visible = true;
-    } else if (this.selectedHexagonMesh) { // Check if selectedHexagonMesh exists before accessing visible
-      this.selectedHexagonMesh.visible = false;
-    }
-  }
-
-  // Method to create/update visual markers for strategic resources
-  public updateHexagonVisuals(
-    scannedHexIds: string[] | undefined, // Changed from Set<string> to string[] for easier state management if needed
-    hexagonStrategicResources: Record<string, string | null> // Assuming string is StrategicResourceType
-  ) {
-    this.strategicResourceMarkers.clear(); // Clear old markers
-
-    if (!scannedHexIds || !hexagonStrategicResources) return;
-
-    const scannedSet = new Set(scannedHexIds);
-
-    this.hexagons.forEach(hex => {
-      if (scannedSet.has(hex.id)) {
-        const resourceType = hexagonStrategicResources[hex.id];
-        if (resourceType) {
-          let material = this.resourceMarkerMaterials[resourceType];
-          if (!material) {
-            // Create a simple procedural texture for the resource type
-            const canvas = document.createElement('canvas');
-            canvas.width = 64;
-            canvas.height = 64;
-            const context = canvas.getContext('2d');
-            if (context) {
-              context.beginPath();
-              context.arc(32, 32, 28, 0, 2 * Math.PI, false);
-              // Simple color coding for resource types - can be expanded
-              switch (resourceType) {
-                case 'rare_metals': context.fillStyle = 'rgba(100, 100, 200, 0.8)'; break;
-                case 'antimatter_cells': context.fillStyle = 'rgba(255, 0, 255, 0.8)'; break;
-                case 'exotic_isotopes': context.fillStyle = 'rgba(0, 255, 0, 0.8)'; break;
-                case 'data_conduits': context.fillStyle = 'rgba(255, 255, 0, 0.8)'; break;
-                case 'bioprecursors': context.fillStyle = 'rgba(0, 200, 200, 0.8)'; break;
-                default: context.fillStyle = 'rgba(128, 128, 128, 0.8)';
-              }
-              context.fill();
-              context.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-              context.lineWidth = 4;
-              context.stroke();
-              // Add a letter or symbol
-              context.fillStyle = 'white';
-              context.font = 'bold 24px Arial';
-              context.textAlign = 'center';
-              context.textBaseline = 'middle';
-              context.fillText(resourceType.substring(0, 2).toUpperCase(), 32, 32);
-            }
-            const texture = new THREE.CanvasTexture(canvas);
-            material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
-            this.resourceMarkerMaterials[resourceType] = material;
-          }
-
-          const sprite = new THREE.Sprite(material);
-          sprite.position.copy(hex.center).multiplyScalar(1.01); // Slightly above the hex center
-          const scale = 0.05 * this.earth.geometry.parameters.radius; // Scale based on Earth size
-          sprite.scale.set(scale, scale, scale);
-          sprite.userData.isResourceMarker = true;
-          this.strategicResourceMarkers.add(sprite);
-        }
-      }
-    });
-  }
-  
-  public updateRegionData(regions: WorldRegion[]) {
-    // Clear existing region markers
-    this.regionMarkers.forEach(marker => this.scene.remove(marker));
-    this.regionMarkers = [];
-
-    const earthRadius = this.earth.geometry.parameters.radius;
-
-    regions.forEach(region => {
-      // Simple spherical coordinates to Cartesian for marker placement
-      // region.x and region.y are expected to be normalized [-1, 1] style or lat/lon
-      // Assuming region.x is longitude-like, region.y is latitude-like from GameEngine
-      // Convert to spherical coordinates: phi (polar, from y-axis), theta (azimuthal, around y-axis)
-      // Three.js Spherical: radius, phi (polar angle from positive Y axis), theta (equatorial angle around Y axis from positive Z axis)
-      // Typical geographic: lat (angle from equatorial plane), lon (angle from prime meridian)
-      // If region.x = lon, region.y = lat (in radians for calculation)
-      // phi = PI/2 - lat
-      // theta = lon
-      // The GameEngine uses x,y in a way that seems to be normalized screen/map like.
-      // Let's assume region.x and region.y from GameEngine are somewhat like normalized projection coordinates.
-      // For a simple marker at the region's "center" as defined in GameEngine:
-      // We need to map these x, y to a point on the sphere.
-      // If region.x, region.y are [-1,1] for x and [-0.5, 0.5] for y (approx based on GameEngine values)
-      // This is a bit abstract. Let's use a simpler conversion for visualization for now.
-      // A better way would be for GameEngine regions to have explicit lat/lon centers.
-      // Using the existing x,y as direct mapping to sphere points for visualization if they are already somewhat spherical.
-      // The current GameEngine region x,y are: x: -0.6 to 0.8, y: -0.5 to 0.4. These look like normalized XY plane coords.
-      // We need to project these onto the sphere.
-      // Let's assume these are longitude (scaled) and latitude (scaled) for simplicity of visualization.
-      const phi = Math.PI / 2 - region.y; // Assuming region.y is like latitude
-      const theta = region.x; // Assuming region.x is like longitude
-
-      const position = new THREE.Vector3().setFromSphericalCoords(earthRadius + 0.05, phi, theta);
-
-      // Create a simple marker (e.g., a small sphere or sprite)
-      const markerGeometry = new THREE.SphereGeometry(0.05, 16, 16); // Small sphere
-      const markerMaterial = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(...(region.color || [1,1,1])), // Use region color or default white
-        transparent: true,
-        opacity: 0.7
-      });
-      const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-      marker.position.copy(position);
-      marker.userData.regionId = region.id;
-      marker.name = `RegionMarker_${region.id}`;
-
-      this.scene.add(marker);
-      this.regionMarkers.push(marker);
-    });
-  }
-  
-  public addEventMarker(event: RegionEvent) {
-    const geometry = new THREE.SphereGeometry(0.1, 8, 8);
-    const material = new THREE.MeshBasicMaterial({ 
-      color: this.getEventColor(event.type),
-      transparent: true,
-      opacity: 0.8
-    });
-    
-    const marker = new THREE.Mesh(geometry, material);
-    // Position based on event coordinates
-    marker.position.setFromSphericalCoords(2.1, Math.PI/2 - event.y, event.x);
-    
-    this.scene.add(marker);
-    this.eventMarkers.push(marker);
-    
-    // Remove after event duration
-    setTimeout(() => {
-      this.scene.remove(marker);
-      const index = this.eventMarkers.indexOf(marker);
-      if (index > -1) this.eventMarkers.splice(index, 1);
-    }, event.duration);
-  }
-  
-  private getEventColor(type: EventType): number {
-    const colors = {
-      [EventType.NUCLEAR_STRIKE]: 0xff0000,
-      [EventType.BIOLOGICAL_WEAPON]: 0x00ff00,
-      [EventType.CYBER_ATTACK]: 0x0088ff,
-      [EventType.CLIMATE_DISASTER]: 0xffaa00,
-      [EventType.ROGUE_AI]: 0xff00ff,
-      [EventType.SPACE_WEAPON]: 0xffffff,
-      [EventType.HEALING]: 0x00ff88,
-      [EventType.ENVIRONMENTAL_RESTORATION]: 0x88ff00
-    };
-    return colors[type] || 0xffffff;
-  }
-  
-  public compromiseSatellite(satelliteId: string) {
-    const satellite = this.satellites.find(s => s.id === satelliteId);
-    if (satellite) {
-      satellite.compromised = true;
-    }
-  }
-  
-  public destroySatellite(satelliteId: string) {
-    const satellite = this.satellites.find(s => s.id === satelliteId);
-    if (satellite) {
-      satellite.active = false;
-      this.scene.remove(satellite.mesh);
-    }
-  }
-  
   public resize(width: number, height: number) {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
@@ -1115,73 +613,41 @@ export class Earth3D {
     if (this.animationId) {
       cancelAnimationFrame(this.animationId);
     }
+    // TODO: Dispose geometries, materials, textures to free up GPU memory
+    // Example: this.earth.geometry.dispose(); (this.earth.material as THREE.Material).dispose();
+    // Iterate over scene children and dispose them if they have dispose methods.
     this.renderer.dispose();
   }
 
-  public updateFacilityVisuals(facilities: PlanetaryFacility[], allHexagons: { id: string, center: THREE.Vector3 }[], regions: WorldRegion[]) {
-    this.facilityMarkers.forEach(marker => this.scene.remove(marker));
-    this.facilityMarkers = [];
-    const earthRadius = this.earth.geometry.parameters.radius;
-
-    facilities.forEach(facility => {
-      let position: THREE.Vector3 | null = null;
-      if (facility.hexagonId) {
-        const hex = allHexagons.find(h => h.id === facility.hexagonId);
-        if (hex) {
-          position = hex.center.clone().normalize().multiplyScalar(earthRadius + 0.02); // Slightly above surface
-        }
-      }
-
-      if (!position) {
-        // Fallback to region center if no hexagonId or hex not found
-        const region = regions.find(r => r.id === facility.regionId);
-        if (region) {
-          // Approx. region center logic (same as region markers, maybe refactor to a helper)
-          const phi = Math.PI / 2 - region.y;
-          const theta = region.x;
-          position = new THREE.Vector3().setFromSphericalCoords(earthRadius + 0.05, phi, theta);
-        }
-      }
-
-      if (position) {
-        // TODO: Use facility.type to get definition and visual key from FACILITY_DEFINITIONS
-        // For now, a generic marker
-        let color = 0x999999; // Default color
-        if (facility.type === 'research_outpost') color = 0x00ffff;
-        else if (facility.type === 'resource_extractor') color = 0xffaa00;
-        else if (facility.type === 'defense_platform') color = 0xff00ff;
-
-        const markerGeom = new THREE.BoxGeometry(0.06, 0.06, 0.1); // Simple box for now
-        const markerMat = new THREE.MeshPhongMaterial({ color });
-        const marker = new THREE.Mesh(markerGeom, markerMat);
-        marker.position.copy(position);
-        marker.lookAt(this.earth.position); // Orient "up" from earth center
-
-        // Visual cue for construction vs operational
-        if (facility.constructionTimeLeft && facility.constructionTimeLeft > 0) {
-          markerMat.opacity = 0.5;
-          markerMat.transparent = true;
-        } else if (!facility.operational) { // Not yet started construction or errored (though not modeled yet)
-            markerMat.opacity = 0.3;
-            markerMat.transparent = true;
-        } else {
-            markerMat.opacity = 1.0;
-            markerMat.transparent = false;
-        }
-
-        marker.userData = { facilityId: facility.id, type: 'facility' };
-        marker.name = `FacilityMarker_${facility.id}`;
-        this.scene.add(marker);
-        this.facilityMarkers.push(marker);
-      }
-    });
-  }
-
+  /**
+   * Projects a 3D world position to normalized screen coordinates and checks if it's in front of the camera.
+   * @param worldPosition The THREE.Vector3 position in world space.
+   * @returns A THREE.Vector3 with x, y in [-1, 1] normalized screen space, and z indicating depth relative to camera.
+   *          Returns null if the point is behind the camera plane.
+   */
   public projectToScreen(worldPosition: THREE.Vector3): THREE.Vector3 | null {
     if (!this.camera || !this.renderer.domElement) return null;
 
+    // Check if the point is behind the camera's near plane using a dot product.
+    // This is more reliable than checking projected z > 1, which can be ambiguous.
+    const cameraDirection = new THREE.Vector3();
+    this.camera.getWorldDirection(cameraDirection);
+    const vectorToPoint = worldPosition.clone().sub(this.camera.position);
+
+    if (vectorToPoint.dot(cameraDirection) < 0) {
+      // Point is behind the camera (more accurately, behind the plane the camera is on, facing its direction)
+      return null;
+    }
+
     const screenPosition = worldPosition.clone();
-    screenPosition.project(this.camera); // Projects x, y, z to range -1 to 1
+    screenPosition.project(this.camera); // Projects x, y, z to range -1 to 1 if in frustum
+
+    // screenPosition.z will be < 1 if in front of the camera's far plane and > -1 if behind near plane.
+    // For panning, we mainly care about x and y, but z < 1 is a good check it's generally in view.
+    return screenPosition;
+  }
+  // #endregion Main Loop & Lifecycle
+}
 
     // Check if the point is behind the camera
     // screenPosition.z will be > 1 if behind the camera's near plane after projection

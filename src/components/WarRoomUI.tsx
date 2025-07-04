@@ -1,5 +1,5 @@
 import React from 'react';
-import { WorldRegion, RegionEvent, EventType } from '../engine/GameEngine';
+import { WorldRegion, RegionEvent, EventType, GameState } from '../engine/GameEngine'; // Imported GameState
 import { Satellite } from '../components/Earth3D';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -10,23 +10,21 @@ import {
   Shield, 
   Zap, 
   Skull, 
-  AlertTriangle, 
-  Radio,
+  AlertTriangle,
   Eye,
-  Sword,
   Heart,
   Leaf,
-  ScanSearch, // For Geo Scanner
-  WifiOff, // For EMP Pulse
-  Coins, // For Credits
-  FlaskConical, // For Research
-  Atom, // For generic strategic resources
-  Diamond, // Example for Rare Metals
-  Boxes, // Example for Data Conduits
-  Droplets, // Example for Bioprecursors
-  Sparkles // Example for Antimatter Cells or Exotic Isotopes
+  ScanSearch,
+  WifiOff,
+  Coins,
+  FlaskConical,
+  Atom,
+  Diamond,
+  Boxes,
+  Droplets,
+  Sparkles
 } from 'lucide-react';
-import { StrategicResourceType } from '../engine/definitions'; // Import StrategicResourceType
+import { StrategicResourceType } from '../engine/definitions';
 
 interface ContextMenuProps {
   visible: boolean;
@@ -57,10 +55,10 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   };
 
   const renderRegionMenu = () => (
-    <div className=\"space-y-2\">
-      <div className=\"border-b border-red-800 pb-2 mb-2\">
-        <h3 className=\"font-bold text-red-400 military-font\">{region?.name}</h3>
-        <div className=\"grid grid-cols-2 gap-2 text-xs mt-1\">
+    <div className="space-y-2">
+      <div className="border-b border-red-800 pb-2 mb-2">
+        <h3 className="font-bold text-red-400 military-font">{region?.name}</h3>
+        <div className="grid grid-cols-2 gap-2 text-xs mt-1">
           <div>Pop: {region?.population ? (region.population / 1000000).toFixed(0) + 'M' : 'N/A'}</div>
           <div>Health: {region?.health?.toFixed(0)}%</div>
           <div>Env: {region?.environment?.toFixed(0)}%</div>
@@ -68,76 +66,76 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         </div>
       </div>
       
-      <div className=\"space-y-1\">
-        <div className=\"text-xs text-red-300 font-semibold mb-1\">DEPLOY THREATS</div>
+      <div className="space-y-1">
+        <div className="text-xs text-red-300 font-semibold mb-1">DEPLOY THREATS</div>
         <Button
-          size=\"sm\"
-          variant=\"destructive\"
-          className=\"w-full justify-start text-xs\"
+          size="sm"
+          variant="destructive"
+          className="w-full justify-start text-xs"
           onClick={() => handleAction('deploy', { type: EventType.NUCLEAR_STRIKE, region })}
         >
-          <Target className=\"w-3 h-3 mr-1\" />
+          <Target className="w-3 h-3 mr-1" />
           Nuclear Strike
         </Button>
         <Button
-          size=\"sm\"
-          variant=\"destructive\"
-          className=\"w-full justify-start text-xs\"
+          size="sm"
+          variant="destructive"
+          className="w-full justify-start text-xs"
           onClick={() => handleAction('deploy', { type: EventType.BIOLOGICAL_WEAPON, region })}
         >
-          <Skull className=\"w-3 h-3 mr-1\" />
+          <Skull className="w-3 h-3 mr-1" />
           Biological Weapon
         </Button>
         <Button
-          size=\"sm\"
-          variant=\"destructive\"
-          className=\"w-full justify-start text-xs\"
+          size="sm"
+          variant="destructive"
+          className="w-full justify-start text-xs"
           onClick={() => handleAction('deploy', { type: EventType.CYBER_ATTACK, region })}
         >
-          <Zap className=\"w-3 h-3 mr-1\" />
+          <Zap className="w-3 h-3 mr-1" />
           Cyber Attack
         </Button>
         <Button
-          size=\"sm\"
-          variant=\"destructive\"
-          className=\"w-full justify-start text-xs\"
+          size="sm"
+          variant="destructive"
+          className="w-full justify-start text-xs"
           onClick={() => handleAction('deploy', { type: EventType.ROGUE_AI, region })}
         >
-          <AlertTriangle className=\"w-3 h-3 mr-1\" />
+          <AlertTriangle className="w-3 h-3 mr-1" />
           Rogue AI
         </Button>
         
-        <Separator className=\"my-2\" />
+        <Separator className="my-2" />
         
-        <div className=\"text-xs text-green-300 font-semibold mb-1\">DEPLOY AID</div>
+        <div className="text-xs text-green-300 font-semibold mb-1">DEPLOY AID</div>
         <Button
-          size=\"sm\"
-          variant=\"default\"
-          className=\"w-full justify-start text-xs\"
+          size="sm"
+          variant="default"
+          className="w-full justify-start text-xs"
           onClick={() => handleAction('deploy', { type: EventType.HEALING, region })}
         >
-          <Heart className=\"w-3 h-3 mr-1\" />
+          <Heart className="w-3 h-3 mr-1" />
           Medical Aid
         </Button>
         <Button
-          size=\"sm\"
-          variant=\"default\"
-          className=\"w-full justify-start text-xs\"
+          size="sm"
+          variant="default"
+          className="w-full justify-start text-xs"
           onClick={() => handleAction('deploy', { type: EventType.ENVIRONMENTAL_RESTORATION, region })}
         >
-          <Leaf className=\"w-3 h-3 mr-1\" />
+          <Leaf className="w-3 h-3 mr-1" />
           Environmental Aid
         </Button>
         
-        <Separator className=\"my-2\" />
+        <Separator className="my-2" />
         
         <Button
-          size=\"sm\"
-          variant=\"outline\"
-          className=\"w-full justify-start text-xs\"
+          size="sm"
+          variant="outline"
+          className="w-full justify-start text-xs"
           onClick={() => handleAction('focus', region)}
         >
-          <Eye className=\"w-3 h-3 mr-1\" />
+          <Eye className="w-3 h-3 mr-1" />
           Focus View
         </Button>
       </div>
@@ -145,41 +143,41 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   );
 
   const renderSatelliteMenu = () => (
-    <div className=\"space-y-2\">
-      <div className=\"border-b border-blue-800 pb-2 mb-2\">
-        <h3 className=\"font-bold text-blue-400 military-font\">{satellite?.name}</h3>
-        <div className=\"flex items-center gap-2 text-xs mt-1\">
-          <Badge variant={satellite?.active ? 'default' : 'destructive'} className=\"text-xs\">
+    <div className="space-y-2">
+      <div className="border-b border-blue-800 pb-2 mb-2">
+        <h3 className="font-bold text-blue-400 military-font">{satellite?.name}</h3>
+        <div className="flex items-center gap-2 text-xs mt-1">
+          <Badge variant={satellite?.active ? 'default' : 'destructive'} className="text-xs">
             {satellite?.active ? 'ACTIVE' : 'OFFLINE'}
           </Badge>
-          <Badge variant={satellite?.compromised ? 'destructive' : 'default'} className=\"text-xs\">
+          <Badge variant={satellite?.compromised ? 'destructive' : 'default'} className="text-xs">
             {satellite?.compromised ? 'COMPROMISED' : 'SECURE'}
           </Badge>
         </div>
-        <div className=\"text-xs text-gray-300 mt-1\">
+        <div className="text-xs text-gray-300 mt-1">
           Type: {satellite?.type.toUpperCase()}
         </div>
       </div>
       
-      <div className=\"space-y-1\">
+      <div className="space-y-1">
         {satellite?.active && !satellite.compromised && (
           <>
             <Button
-              size=\"sm\"
-              variant=\"destructive\"
-              className=\"w-full justify-start text-xs\"
+              size="sm"
+              variant="destructive"
+              className="w-full justify-start text-xs"
               onClick={() => handleAction('hack', satellite)}
             >
-              <Zap className=\"w-3 h-3 mr-1\" />
+              <Zap className="w-3 h-3 mr-1" />
               Hack Satellite
             </Button>
             <Button
-              size=\"sm\"
-              variant=\"destructive\"
-              className=\"w-full justify-start text-xs\"
+              size="sm"
+              variant="destructive"
+              className="w-full justify-start text-xs"
               onClick={() => handleAction('destroy', satellite)}
             >
-              <Target className=\"w-3 h-3 mr-1\" />
+              <Target className="w-3 h-3 mr-1" />
               Destroy
             </Button>
 
@@ -211,23 +209,23 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         
         {satellite?.compromised && (
           <Button
-            size=\"sm\"
-            variant=\"default\"
-            className=\"w-full justify-start text-xs\"
+            size="sm"
+            variant="default"
+            className="w-full justify-start text-xs"
             onClick={() => handleAction('restore', satellite)}
           >
-            <Shield className=\"w-3 h-3 mr-1\" />
+            <Shield className="w-3 h-3 mr-1" />
             Restore Control
           </Button>
         )}
         
         <Button
-          size=\"sm\"
-          variant=\"outline\"
-          className=\"w-full justify-start text-xs\"
+          size="sm"
+          variant="outline"
+          className="w-full justify-start text-xs"
           onClick={() => handleAction('track', satellite)}
         >
-          <Eye className=\"w-3 h-3 mr-1\" />
+          <Eye className="w-3 h-3 mr-1" />
           Track Orbit
         </Button>
       </div>
@@ -235,41 +233,41 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   );
 
   const renderEventMenu = () => (
-    <div className=\"space-y-2\">
-      <div className=\"border-b border-orange-800 pb-2 mb-2\">
-        <h3 className=\"font-bold text-orange-400 military-font\">{event?.type.replace('_', ' ')}</h3>
-        <div className=\"text-xs mt-1\">
+    <div className="space-y-2">
+      <div className="border-b border-orange-800 pb-2 mb-2">
+        <h3 className="font-bold text-orange-400 military-font">{event?.type.replace('_', ' ')}</h3>
+        <div className="text-xs mt-1">
           <div>Severity: {event?.severity ? (event.severity * 100).toFixed(0) + '%' : 'N/A'}</div>
           <div>Duration: {event?.timeLeft ? (event.timeLeft / 1000).toFixed(1) + 's' : 'N/A'}</div>
         </div>
       </div>
       
-      <div className=\"space-y-1\">
+      <div className="space-y-1">
         <Button
-          size=\"sm\"
-          variant=\"default\"
-          className=\"w-full justify-start text-xs\"
+          size="sm"
+          variant="default"
+          className="w-full justify-start text-xs"
           onClick={() => handleAction('counter', event)}
         >
-          <Shield className=\"w-3 h-3 mr-1\" />
+          <Shield className="w-3 h-3 mr-1" />
           Deploy Countermeasures
         </Button>
         <Button
-          size=\"sm\"
-          variant=\"destructive\"
-          className=\"w-full justify-start text-xs\"
+          size="sm"
+          variant="destructive"
+          className="w-full justify-start text-xs"
           onClick={() => handleAction('amplify', event)}
         >
-          <Zap className=\"w-3 h-3 mr-1\" />
+          <Zap className="w-3 h-3 mr-1" />
           Amplify Effect
         </Button>
         <Button
-          size=\"sm\"
-          variant=\"outline\"
-          className=\"w-full justify-start text-xs\"
+          size="sm"
+          variant="outline"
+          className="w-full justify-start text-xs"
           onClick={() => handleAction('analyze', event)}
         >
-          <Eye className=\"w-3 h-3 mr-1\" />
+          <Eye className="w-3 h-3 mr-1" />
           Analyze Impact
         </Button>
       </div>
@@ -278,7 +276,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
   return (
     <div
-      className=\"fixed z-50 bg-black/90 border border-red-900 rounded-lg p-3 min-w-48 shadow-2xl backdrop-blur-sm\"
+      className="fixed z-50 bg-black/90 border border-red-900 rounded-lg p-3 min-w-48 shadow-2xl backdrop-blur-sm"
       style={{ 
         left: Math.min(x, window.innerWidth - 200), 
         top: Math.min(y, window.innerHeight - 300),
@@ -295,7 +293,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 };
 
 interface TacticalOverlayProps {
-  gameState: any;
+  gameState: GameState; // Changed from any to GameState
   onModeChange: (mode: 'chaos' | 'peace' | 'neutral') => void;
   onSpeedChange: (speed: number) => void;
   onTogglePlay: () => void;

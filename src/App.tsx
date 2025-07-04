@@ -11,6 +11,8 @@ import { TechId } from './engine/Technology';
 import { FacilityType } from './engine/definitions'; // Import FacilityType for handlers
 import { Button } from '@/components/ui/button';
 import { AlertTriangle, Power, FlaskConical as TechIcon, Building as FacilityIcon } from 'lucide-react'; // Added FacilityIcon
+import { WarRoomAudio } from './audio/WarRoomAudio';
+import { useGameInitialization } from './hooks/useGameInitialization';
 
 interface HexagonDetailsForPanel {
   id: string;
@@ -20,82 +22,10 @@ interface HexagonDetailsForPanel {
   // position: { x: number, y: number }; // Screen position for the panel
 }
 
-interface AudioSystem {
-  context: AudioContext;
-  playAlert: (type: 'warning' | 'critical' | 'success', pan?: number) => void;
-  playAmbient: () => void;
-  stopAmbient: () => void;
-}
-
-class WarRoomAudio {
-  private context: AudioContext;
-  private ambientGain: GainNode;
-  private ambientOscillator: OscillatorNode | null = null;
-  
-  constructor() {
-    this.context = new AudioContext();
-    this.ambientGain = this.context.createGain();
-    this.ambientGain.connect(this.context.destination);
-    this.ambientGain.gain.value = 0.1; // Reduced ambient volume a bit
-  }
-  
-  playAlert(type: 'warning' | 'critical' | 'success', pan: number = 0) {
-    // Ensure pan value is within -1 to 1 range
-    const effectivePan = Math.max(-1, Math.min(1, pan));
-
-    const frequencies = {
-      warning: [800, 1000],
-      critical: [400, 600, 800],
-      success: [600, 800, 1000]
-    };
-    
-    const freqs = frequencies[type];
-    const baseVolume = type === 'critical' ? 0.12 : 0.08; // Slightly louder critical alerts
-
-    freqs.forEach((freq, i) => {
-      setTimeout(() => {
-        const osc = this.context.createOscillator();
-        const gain = this.context.createGain();
-        const panner = this.context.createStereoPanner();
-
-        osc.connect(gain);
-        gain.connect(panner);
-        panner.connect(this.context.destination);
-        
-        panner.pan.setValueAtTime(effectivePan, this.context.currentTime);
-        osc.frequency.setValueAtTime(freq, this.context.currentTime);
-        gain.gain.setValueAtTime(baseVolume, this.context.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, this.context.currentTime + 0.35); // Slightly longer tail
-        
-        osc.start();
-        osc.stop(this.context.currentTime + 0.35);
-      }, i * (type === 'critical' ? 80 : 100)); // Faster sequence for critical
-    });
-  }
-  
-  playAmbient() {
-    if (this.ambientOscillator) return;
-    
-    this.ambientOscillator = this.context.createOscillator();
-    this.ambientOscillator.type = 'sine';
-    this.ambientOscillator.frequency.setValueAtTime(60, this.context.currentTime);
-    this.ambientOscillator.connect(this.ambientGain);
-    this.ambientOscillator.start();
-  }
-  
-  stopAmbient() {
-    if (this.ambientOscillator) {
-      this.ambientOscillator.stop();
-      this.ambientOscillator = null;
-    }
-  }
-}
+// AudioSystem interface and WarRoomAudio class were moved to src/audio/WarRoomAudio.ts
 
 export default function GlobalCrisisSimulator() {
-  const earth3DRef = useRef<Earth3D | null>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
-  const gameEngineRef = useRef<GameEngine | null>(null);
-  const audioRef = useRef<WarRoomAudio | null>(null);
   const animationRef = useRef<number | null>(null);
   
   const [gameState, setGameState] = useState<GameState | null>(null);
@@ -111,157 +41,104 @@ export default function GlobalCrisisSimulator() {
   });
   const [selectedHexagonDetails, setSelectedHexagonDetails] = useState<HexagonDetailsForPanel | null>(null);
   const [hexagonPanelPosition, setHexagonPanelPosition] = useState({ x: 0, y: 0 });
-  const [isInitialized, setIsInitialized] = useState(false);
+  // isInitialized is now managed by useGameInitialization
   const [lastEventCount, setLastEventCount] = useState(0);
   const [showTechnologyPanel, setShowTechnologyPanel] = useState(false);
   const [showFacilityPanel, setShowFacilityPanel] = useState(false);
   const [selectingHexForScan, setSelectingHexForScan] = useState<Satellite | null>(null);
   const [selectingHexForBuilding, setSelectingHexForBuilding] = useState<FacilityType | null>(null);
-  const [appTargetedHexIdForBuild, setAppTargetedHexIdForBuild] = useState<string | null>(null); // Hex ID selected on map for building
+  const [appTargetedHexIdForBuild, setAppTargetedHexIdForBuild] = useState<string | null>(null);
 
-  // Initialize game systems
+  const { gameEngineRef, earth3DRef, audioRef, isInitialized } = useGameInitialization({
+    canvasContainerRef,
+    setGameState,
+    setContextMenu,
+    setSelectedHexagonDetails,
+    setHexagonPanelPosition,
+    // Pass down setters for the hook to potentially use or for context,
+    // though primary logic for these states might remain in App.tsx's handlers.
+    setSelectingHexForScan: setSelectingHexForScan,
+    setAppTargetedHexIdForBuild: setAppTargetedHexIdForBuild,
+    setSelectingHexForBuilding: setSelectingHexForBuilding,
+    setShowFacilityPanel: setShowFacilityPanel,
+  });
+
+  // Effect to set up complex Earth3D click handlers that depend on App.tsx state,
+  // once the game systems are initialized by the hook.
   useEffect(() => {
-    if (!canvasContainerRef.current) return;
-    
-    try {
-      // Initialize game engine
-      gameEngineRef.current = new GameEngine();
-      const initialState = gameEngineRef.current.createInitialWorld();
-      setGameState(initialState);
-      
-      // Initialize 3D Earth
-      earth3DRef.current = new Earth3D(canvasContainerRef.current);
-      
-      // Initialize audio
-      audioRef.current = new WarRoomAudio();
-      
-      // Setup event handlers
-      earth3DRef.current.onRegionClick = (region, x, y) => {
-        setContextMenu({
-          visible: true,
-          x,
-          y,
-          region,
-          satellite: null,
-          event: null,
-          type: 'region',
-          target: region
-        });
-      };
-      
-      earth3DRef.current.onSatelliteClick = (satellite, x, y) => {
-        setContextMenu({
-          visible: true,
-          x,
-          y,
-          region: null,
-          satellite,
-          event: null,
-          type: 'satellite',
-          target: satellite
-        });
-      };
-      
-      earth3DRef.current.onHexagonClick = (hexagonId, _hexagonCenter, clickX, clickY) => {
-        if (!gameState || !gameEngineRef.current) return;
+    if (isInitialized && earth3DRef.current && gameEngineRef.current && audioRef.current) {
+      const earth3D = earth3DRef.current;
+      const gameEngine = gameEngineRef.current;
+      const audio = audioRef.current; // Capture current ref value for use in callbacks
 
-        const strategicResource = gameState.hexagonStrategicResources[hexagonId];
-        const facilitiesOnHex = gameState.activeFacilities.filter(f => f.hexagonId === hexagonId);
+      // Basic click handlers (onRegionClick, onSatelliteClick) are set by useGameInitialization
+      // to call setContextMenu. Here we set up the more complex onHexagonClick.
 
-        // Find events affecting this hexagon. This is an approximation.
-        // A more accurate way would be if events stored which hexes they are on,
-        // or to use a spatial query. For now, check if event x,y is near hex center.
-        // This requires hex center data to be available or passed from Earth3D.
-        // For simplicity, we'll pass an empty array for events for now, or use region events.
-        // const eventsOnHex = gameState.activeEvents.filter(event => {
-        //   // Requires a way to map event x,y to a hex or check proximity to hexCenter
-        //   return false; // Placeholder
-        // });
-        // For now, let's assume events are not hex-specific in this panel, or show region events.
-        // This detail needs refinement if hex-specific event display is crucial.
-
-        setSelectedHexagonDetails({
-          id: hexagonId,
-          strategicResource,
-          facilities: facilitiesOnHex,
-          events: [], // Placeholder for hex-specific events
-        });
-        // Position the panel near the click, ensuring it's within bounds
-        setHexagonPanelPosition({
-            x: Math.min(clickX + 15, window.innerWidth - 300), // Ensure panel doesn't go off-screen right
-            y: Math.min(clickY + 15, window.innerHeight - 250) // Ensure panel doesn't go off-screen bottom
-        });
-
-        // Close context menu if it's open
-        setContextMenu(prev => ({ ...prev, visible: false }));
-
-        // If in "select hex for scan" mode
-        if (selectingHexForScan && gameEngineRef.current && gameState) {
-          const satellite = selectingHexForScan;
-          setSelectingHexForScan(null); // Exit mode
-          const res = gameEngineRef.current.performGeoScan(gameState, satellite.id, hexagonId);
-          if (res.success && res.newState) {
-            setGameState(res.newState);
-            audioRef.current?.playAlert('success');
-            // Update panel if open for this hex
-            if (selectedHexagonDetails && selectedHexagonDetails.id === hexagonId) {
-                 setSelectedHexagonDetails(prev => prev ? ({...prev, strategicResource: res.revealedResource }) : null);
-            }
-          } else {
-            audioRef.current?.playAlert('warning');
-            alert(`GeoScan failed: ${res.message}`);
+      earth3D.onHexagonClick = (hexagonId, _hexagonCenter, clickX, clickY) => {
+        setGameState(currentGS => {
+          if (!currentGS || !gameEngineRef.current) { // Ensure gameEngineRef is valid inside callback
+            return currentGS;
           }
-          return; // End click handling here for scan mode
-        }
 
-        // If in "select hex for building" mode
-        if (selectingHexForBuilding && gameEngineRef.current && gameState) {
-            console.log(`Hexagon ${hexagonId} selected for building ${selectingHexForBuilding}.`);
-            setAppTargetedHexIdForBuild(hexagonId); // Pass this to FacilityManagementPanel via prop
-            setSelectingHexForBuilding(null); // Exit mode
-            setShowFacilityPanel(true); // Ensure facility panel is open to receive the hex ID
-            // Note: The HexagonInfoPanel will still open due to setSelectedHexagonDetails above.
-            // This might be okay, or we might want to prevent it if in building selection mode.
-            // For now, let's allow both. The user can close the info panel.
-            return; // End click handling
-        }
+          const strategicResource = currentGS.hexagonStrategicResources[hexagonId];
+          const facilitiesOnHex = currentGS.activeFacilities.filter(f => f.hexagonId === hexagonId);
 
+          setSelectedHexagonDetails({
+            id: hexagonId, strategicResource, facilities: facilitiesOnHex, events: [],
+          });
+          setHexagonPanelPosition({
+            x: Math.min(clickX + 15, window.innerWidth - 300),
+            y: Math.min(clickY + 15, window.innerHeight - 250),
+          });
+          setContextMenu(prev => ({ ...prev, visible: false }));
 
+          let nextGameState = currentGS;
+
+          if (selectingHexForScan) {
+            const satelliteForScan = selectingHexForScan;
+            setSelectingHexForScan(null);
+            const res = gameEngine.performGeoScan(currentGS, satelliteForScan.id, hexagonId);
+            if (res.success && res.newState) {
+              nextGameState = res.newState;
+              audio.playAlert('success');
+              setSelectedHexagonDetails(prev => (prev && prev.id === hexagonId && res.revealedResource !== undefined) ? {...prev, strategicResource: res.revealedResource } : prev);
+            } else {
+              audio.playAlert('warning');
+              alert(`GeoScan failed: ${res.message}`);
+            }
+            return nextGameState;
+          }
+
+          if (selectingHexForBuilding) {
+            const facilityTypeToBuild = selectingHexForBuilding;
+            console.log(`Hexagon ${hexagonId} selected for building ${facilityTypeToBuild}.`);
+            setAppTargetedHexIdForBuild(hexagonId);
+            setSelectingHexForBuilding(null);
+            setShowFacilityPanel(true);
+          }
+          return nextGameState;
+        });
       };
-
-      setIsInitialized(true);
-      
-    } catch (error) {
-      console.error('Failed to initialize 3D systems:', error);
     }
-    
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-      if (earth3DRef.current) {
-        earth3DRef.current.dispose();
-      }
-      if (audioRef.current) {
-        audioRef.current.stopAmbient();
-      }
-    };
-  }, []);
+  }, [
+    isInitialized, earth3DRef, gameEngineRef, audioRef,
+    setGameState,
+    setSelectedHexagonDetails, setHexagonPanelPosition, setContextMenu,
+    selectingHexForScan, setSelectingHexForScan,
+    selectingHexForBuilding, setSelectingHexForBuilding,
+    setAppTargetedHexIdForBuild, setShowFacilityPanel
+  ]);
   
   // Game loop & other useEffects that depend on gameState
   useEffect(() => {
     // Update Earth3D visuals when gameState changes, especially for hex resources
-    if (earth3DRef.current && gameState) {
+    if (isInitialized && earth3DRef.current && gameState) {
       earth3DRef.current.updateHexagonVisuals(gameState.scannedHexes, gameState.hexagonStrategicResources as Record<string, string | null>);
-      // Consider if facility visuals also need updating here or if they are handled by their own flow
-      // For now, let's assume GameEngine state changes trigger re-renders that pass new props.
-      // However, direct calls for imperative updates to Three.js objects are often needed.
-      // earth3DRef.current.updateFacilityVisuals(gameState.activeFacilities, earth3DRef.current.getHexagonsData(), gameState.regions);
-      // The getHexagonsData() would need to be a new public method in Earth3D if we go this route.
-      // For now, focusing on scanned hexes.
+      // TODO: Consider adding earth3DRef.current.updateFacilityVisuals if/when available and needed
     }
 
-    if (!gameState || !gameState.running || !gameEngineRef.current) return;
+    // Ensure all refs and necessary gameState properties are available before starting loop logic
+    if (!isInitialized || !gameState || !gameState.running || !gameEngineRef.current || !earth3DRef.current || !audioRef.current) return;
     
     let lastTime = performance.now();
     
@@ -269,22 +146,23 @@ export default function GlobalCrisisSimulator() {
       const deltaTime = currentTime - lastTime;
       lastTime = currentTime;
       
-      if (gameEngineRef.current) {
-        const newState = gameEngineRef.current.updateWorld(gameState, deltaTime);
-        setGameState(newState);
+      // Check refs inside the loop as well, though they should be stable after initialization
+      // and gameState is also available.
+      if (gameEngineRef.current && earth3DRef.current && audioRef.current && gameState) {
+        // Use a local variable for gameState to ensure consistency within this iteration of the loop
+        const currentGameState = gameState;
+        const newState = gameEngineRef.current.updateWorld(currentGameState, deltaTime);
+        setGameState(newState); // This triggers re-render and updates gameState for next cycle/other effects
         
-        // Update 3D visualization
-        if (earth3DRef.current) {
-          earth3DRef.current.updateRegionData(newState.regions);
+        earth3DRef.current.updateRegionData(newState.regions);
           
-          // Add new event markers and play sounds
-          newState.activeEvents.forEach(event => {
-            if (event.timeLeft === event.duration) { // New event
-              earth3DRef.current?.addEventMarker(event);
+        newState.activeEvents.forEach(event => {
+          if (event.timeLeft === event.duration) { // New event
+            earth3DRef.current?.addEventMarker(event);
 
-              // Calculate pan for new event sound
-              let pan = 0;
-              if (earth3DRef.current) {
+            let pan = 0;
+            const earth3D = earth3DRef.current; // Already confirmed not null
+            if (earth3D) { // Still, good practice for safety if used in further nested closures
                 // Convert event x,y (normalized lat/lon-like) to a 3D point on sphere surface
                 // Assuming event.x, event.y are similar to region.x, region.y used in GameEngine for positioning
                 // These are abstract coordinates; let's assume they map to a sphere of radius ~2.1 like event markers
@@ -293,7 +171,7 @@ export default function GlobalCrisisSimulator() {
                   Math.PI / 2 - event.y, // Convert y to polar angle (phi)
                   event.x // Convert x to azimuthal angle (theta)
                 );
-                const screenPos = earth3DRef.current.projectToScreen(eventWorldPos);
+                const screenPos = earth3D.projectToScreen(eventWorldPos);
                 if (screenPos && screenPos.z < 1) { // Check if in front of camera
                   pan = screenPos.x; // Normalized x is -1 to 1
                 }
@@ -301,49 +179,60 @@ export default function GlobalCrisisSimulator() {
               // Determine alert type (e.g., based on event.type or severity)
               // For now, all new random/spawned events are 'warning'
               // User-triggered events will have their own logic in handleContextMenuAction
-              const definition = gameEngineRef.current?.getThreatDefinition(event.type);
+              const gameEngine = gameEngineRef.current; // Already confirmed
+              const audio = audioRef.current; // Already confirmed
+
+              const definition = gameEngine?.getThreatDefinition(event.type);
               const isPositive = definition && (definition.effects.health && definition.effects.health > 0 || definition.effects.environment && definition.effects.environment > 0);
 
-              audioRef.current?.playAlert(isPositive ? 'success' : 'warning', pan);
+              audio?.playAlert(isPositive ? 'success' : 'warning', pan);
             }
           });
-        }
         
-        // Update lastEventCount after processing all events
-        if (newState.activeEvents.length !== lastEventCount) {
-             setLastEventCount(newState.activeEvents.length);
+          if (newState.activeEvents.length !== lastEventCount) {
+              setLastEventCount(newState.activeEvents.length);
+          }
         }
-
       }
       
-      if (gameState.running) {
+      // Check gameState again before queueing next frame, as it might have changed
+      if (gameState && gameState.running) {
         animationRef.current = requestAnimationFrame(gameLoop);
       }
     };
     
-    animationRef.current = requestAnimationFrame(gameLoop);
+    // Start the loop only if all conditions are met
+    if (isInitialized && gameState && gameState.running && gameEngineRef.current && earth3DRef.current && audioRef.current) {
+        animationRef.current = requestAnimationFrame(gameLoop);
+    }
     
     return () => {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [gameState?.running, lastEventCount]);
+  }, [isInitialized, gameState, gameEngineRef, earth3DRef, audioRef, lastEventCount]); // Added all relevant dependencies
   
   // Handle window resize
   useEffect(() => {
+    // Ensure a resize handler is setup only once and when necessary
+    if (!isInitialized || !earth3DRef.current || !canvasContainerRef.current) return;
+
+    const earth3D = earth3DRef.current; // Capture current ref value
+    const canvasContainer = canvasContainerRef.current; // Capture current ref value
+
     const handleResize = () => {
-      if (earth3DRef.current && canvasContainerRef.current) {
-        earth3DRef.current.resize(
-          canvasContainerRef.current.clientWidth,
-          canvasContainerRef.current.clientHeight
+      if (earth3D && canvasContainer) { // Check if refs are still valid in closure
+        earth3D.resize(
+          canvasContainer.clientWidth,
+          canvasContainer.clientHeight
         );
       }
     };
     
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, []);
+  }, [isInitialized, earth3DRef, canvasContainerRef]); // Dependencies ensure this effect runs correctly
   
   // Close context menu and hexagon panel on click outside
   useEffect(() => {
@@ -369,205 +258,224 @@ export default function GlobalCrisisSimulator() {
   }, [contextMenu.visible, selectedHexagonDetails]);
   
   const handleContextMenuAction = useCallback((action: string, target?: any) => {
-    if (!gameEngineRef.current || !gameState || !earth3DRef.current) return;
+    // Ensure all refs are valid and isInitialized is true before proceeding
+    if (!isInitialized || !gameEngineRef.current || !earth3DRef.current || !audioRef.current) return;
+
+    const gameEngine = gameEngineRef.current;
+    const earth3D = earth3DRef.current;
+    const audio = audioRef.current;
     
-    let currentGameState = { ...gameState }; // Use a mutable copy for this handler
-    let pan = 0;
-    let alertType: 'warning' | 'critical' | 'success' = 'warning'; // Default alert type
+    // Use setGameState with a callback to ensure operations on the latest state
+    setGameState(currentGS => {
+      if (!currentGS) return null; // Should be caught by outer isInitialized/gameState check, but good for safety
 
-    // Calculate pan based on the target of the action
-    if (target) {
-        let targetPosition3D: THREE.Vector3 | null = null;
-        if (target.type && target.region) { // Deploy action, target is region
-            const region = target.region as WorldRegion;
-            // Convert region x,y to 3D world coordinates (approximate)
-            targetPosition3D = new THREE.Vector3().setFromSphericalCoords(2.0, Math.PI/2 - region.y, region.x);
-        } else if (target.mesh && target.mesh.position) { // Satellite action, target has a mesh
-            targetPosition3D = target.mesh.position.clone();
-        }
-        // TODO: Add case for event target if needed for 'counter' or 'amplify'
+      let nextGameState = { ...currentGS }; // Start with a copy of the current state
+      let pan = 0;
+      let alertType: 'warning' | 'critical' | 'success' = 'warning';
 
-        if (targetPosition3D) {
-            const screenPos = earth3DRef.current.projectToScreen(targetPosition3D);
-            if (screenPos && screenPos.z < 1) { // Check if in front of camera
-                pan = screenPos.x;
-            }
-        }
-    }
-    
-    switch (action) {
-      case 'deploy':
-        if (target?.type && target?.region) {
-          const resultState = gameEngineRef.current.triggerEvent(currentGameState, target.type, target.region.id);
-          const definition = gameEngineRef.current.getThreatDefinition(target.type as EventType);
-          alertType = definition && (definition.effects.health && definition.effects.health > 0 || definition.effects.environment && definition.effects.environment > 0) ? 'success' : 'critical';
-          audioRef.current?.playAlert(alertType, pan);
-          currentGameState = resultState; // Update currentGameState with the result
-        }
-        break;
+      // Calculate pan based on the target of the action (if any)
+      if (target) {
+          let targetPosition3D: THREE.Vector3 | null = null;
+          if (target.type && target.region) { // Action on a region
+              const region = target.region as WorldRegion;
+              targetPosition3D = new THREE.Vector3().setFromSphericalCoords(2.0, Math.PI/2 - region.y, region.x);
+          } else if (target.mesh && target.mesh.position) { // Action on a satellite (has a mesh)
+              targetPosition3D = target.mesh.position.clone();
+          }
+          // TODO: Handle event targets if they have positions for panning
 
-      case 'geo_scan_area': // Assuming this is the action from satellite context menu
-        if (target?.id && selectedHexagonDetails?.id) { // target is satellite, selectedHexagonDetails for target hex
-            const res = gameEngineRef.current.performGeoScan(currentGameState, target.id, selectedHexagonDetails.id);
-            if (res.success && res.newState) {
-                currentGameState = res.newState;
-                audioRef.current?.playAlert('success', pan);
-                // Update HexagonInfoPanel if it's open for the scanned hex
-                if (selectedHexagonDetails && selectedHexagonDetails.id === res.newState.scannedHexes?.[res.newState.scannedHexes.length-1]) { // A bit fragile way to check last scanned
-                    setSelectedHexagonDetails(prev => prev ? ({
-                        ...prev,
-                        strategicResource: res.revealedResource
-                    }) : null);
-                }
-                 // Earth3D will be updated by the useEffect watching gameState
-            } else {
-                audioRef.current?.playAlert('warning', pan);
-                // console.warn(res.message); // Optionally show message to user
-            }
-        } else if (target?.id && !selectedHexagonDetails?.id) {
-            // If no hex is selected, prompt user or make it area-based scan
-            // For now, requires a selected hex. Could also use onHexagonClick to set a "scanTargetHex" state.
-            console.log("GeoScan action initiated by satellite, but no target hexagon selected on map.");
-            // TODO: Implement a mode to select a hex for scanning after clicking the button.
-            // This might involve setting a state like `isScanningMode = true`
-            // For now, set the app state to wait for a hex click
-            setSelectingHexForScan(target as Satellite); // target is the satellite
-            audioRef.current?.playAlert('success', pan); // Indicate mode change
-            alert("GeoScanner Activated: Click on a hexagon on the globe to scan.");
-            // Close context menu as the next click is for targeting
-            setContextMenu(prev => ({ ...prev, visible: false }));
-        } else {
-             audioRef.current?.playAlert('warning', pan);
-             alert("GeoScan can only be initiated by a GeoScanner satellite.");
-        }
-        // Do not set currentGameState here, as it will be set after hex selection
-        return; // Return early as we are entering a selection mode
+          if (targetPosition3D) {
+              const screenPos = earth3D.projectToScreen(targetPosition3D);
+              if (screenPos && screenPos.z < 1) { // Check if in front of camera
+                  pan = screenPos.x; // Normalized screen x for panning
+              }
+          }
+      }
 
-      case 'hack':
-        if (target && earth3DRef.current) {
-          earth3DRef.current.compromiseSatellite(target.id);
-          audioRef.current?.playAlert('warning', pan);
-        }
-        break;
+      switch (action) {
+        case 'deploy':
+          if (target?.type && target?.region) {
+            const resultState = gameEngine.triggerEvent(nextGameState, target.type as EventType, target.region.id);
+            const definition = gameEngine.getThreatDefinition(target.type as EventType);
+            alertType = definition && (definition.effects.health && definition.effects.health > 0 || definition.effects.environment && definition.effects.environment > 0) ? 'success' : 'critical';
+            audio.playAlert(alertType, pan);
+            nextGameState = resultState;
+          }
+          break;
+
+        case 'geo_scan_area':
+          if (target?.id && selectedHexagonDetails?.id) { // target is satellite, selectedHexagonDetails for target hex
+              const res = gameEngine.performGeoScan(nextGameState, target.id, selectedHexagonDetails.id);
+              if (res.success && res.newState) {
+                  nextGameState = res.newState;
+                  audio.playAlert('success', pan);
+                  // Update HexagonInfoPanel if it's open for the scanned hex
+                  setSelectedHexagonDetails(prev => (prev && prev.id === selectedHexagonDetails.id && res.revealedResource !== undefined) ? { ...prev, strategicResource: res.revealedResource } : prev);
+              } else {
+                  audio.playAlert('warning', pan);
+                  alert(`GeoScan failed: ${res.message}`); // Show user feedback
+              }
+          } else if (target?.id && !selectedHexagonDetails?.id) { // Satellite initiated scan, but no hex selected yet
+              setSelectingHexForScan(target as Satellite); // Enter mode to select a hex
+              audio.playAlert('success', pan); // Indicate mode change
+              alert("GeoScanner Activated: Click on a hexagon on the globe to scan.");
+              setContextMenu(prev => ({ ...prev, visible: false })); // Close menu, next click is for target
+              // No direct game state change here, so return currentGS
+              return currentGS;
+          } else { // Invalid conditions for geo_scan
+               audio.playAlert('warning', pan);
+               alert("GeoScan can only be initiated by a GeoScanner satellite and requires a target or selection mode.");
+          }
+          break;
+
+        case 'hack':
+          if (target?.id) earth3D.compromiseSatellite(target.id); // target should be a satellite
+          audio.playAlert('warning', pan);
+          // Note: Hacking might need to update gameState if satellite status is part of it.
+          // For now, assuming Earth3D handles visual state.
+          break;
+
+        case 'destroy':
+          if (target?.id) earth3D.destroySatellite(target.id); // target should be a satellite
+          audio.playAlert('critical', pan);
+          // TODO: Game state should reflect destroyed satellite if it impacts game logic
+          break;
+
+        case 'restore':
+          if (target?.id) {
+            // earth3D.restoreSatellite(target.id); // Assuming this method exists and handles visuals
+            // Placeholder for actual restoration logic
+            console.log(`Restoring satellite ${target.id}`);
+          }
+          audio.playAlert('success', pan);
+          // TODO: Game state update if satellite status is restored
+          break;
+
+        case 'focus':
+          // Camera focus logic is typically handled by Earth3D directly or via its methods.
+          // if (target?.mesh?.position && earth3DRef.current) {
+          //   earth3DRef.current.zoomToTarget(target.mesh.position, 3); // Example distance
+          // } else if (target?.region && earth3DRef.current) {
+          //   const regionCenter = new THREE.Vector3().setFromSphericalCoords(2.0, Math.PI/2 - target.region.y, target.region.x);
+          //   earth3DRef.current.zoomToTarget(regionCenter, 4);
+          // }
+          break;
         
-      case 'destroy':
-        if (target && earth3DRef.current) {
-          earth3DRef.current.destroySatellite(target.id);
-          audioRef.current?.playAlert('critical', pan);
-        }
-        break;
-        
-      case 'restore':
-        if (target && earth3DRef.current) {
-          // Placeholder: earth3DRef.current.restoreSatellite(target.id);
-          audioRef.current?.playAlert('success', pan);
-        }
-        break;
-        
-      case 'focus':
-        // Focus camera on region - no sound or specific sound?
-        break;
-        
-      case 'counter':
-        // Deploy countermeasures
-        audioRef.current?.playAlert('success', pan);
-        break;
-        
-      case 'amplify':
-        // Amplify event effect
-        audioRef.current?.playAlert('critical', pan);
-        break;
-    }
-    
-    setGameState(currentGameState); // Set the final state after all actions
-  }, [gameState, selectedHexagonDetails]); // Added selectedHexagonDetails as dependency
+        case 'counter':
+        case 'amplify':
+          // These actions might trigger new events or modify existing ones.
+          // This logic should ideally be in GameEngine.
+          // For now, just playing a sound as a placeholder.
+          // nextGameState = gameEngine.handleEventAction(action, target, nextGameState);
+          audio.playAlert(action === 'counter' ? 'success' : 'critical', pan);
+          break;
+        default:
+          console.warn(`Unhandled context menu action: ${action}`);
+          break;
+      }
+      return nextGameState; // Return the potentially modified state
+    });
+  }, [isInitialized, gameEngineRef, earth3DRef, audioRef, selectedHexagonDetails, setSelectedHexagonDetails, setSelectingHexForScan, setContextMenu, setGameState]); // gameState removed from deps, using setter form
 
   const handleStartResearch = useCallback((techId: TechId) => {
-    if (!gameEngineRef.current || !gameState) return;
-    const result = gameEngineRef.current.startResearch(gameState, techId);
-    if (result.success && result.newState) {
-      setGameState(result.newState);
-      audioRef.current?.playAlert('success');
-      // console.log(`Started research on ${techId}`);
-    } else {
-      audioRef.current?.playAlert('warning');
-      // console.warn(`Failed to start research on ${techId}: ${result.message}`);
-      // Optionally, show a toast or notification to the user with result.message
-    }
-  }, [gameState]);
+    if (!isInitialized || !gameEngineRef.current || !audioRef.current) return;
+    const gameEngine = gameEngineRef.current;
+    const audio = audioRef.current;
+    setGameState(currentGS => {
+      if (!currentGS) return null;
+      const result = gameEngine.startResearch(currentGS, techId);
+      if (result.success && result.newState) {
+        audio.playAlert('success');
+        return result.newState;
+      } else {
+        audio.playAlert('warning');
+        // console.warn(`Failed to start research on ${techId}: ${result.message}`);
+        return currentGS;
+      }
+    });
+  }, [isInitialized, gameEngineRef, audioRef, setGameState]); // gameState removed
 
   const handleInitiateHexSelectionForBuilding = useCallback((facilityType: FacilityType) => {
     setSelectingHexForBuilding(facilityType);
-    setAppTargetedHexIdForBuild(null); // Clear any previously targeted hex
-    // Close other panels that might interfere with map selection
+    setAppTargetedHexIdForBuild(null);
     setShowTechnologyPanel(false);
     setContextMenu(prev => ({ ...prev, visible: false }));
     setSelectedHexagonDetails(null);
-    // Alert or UI indication that player should click a hex
     alert(`Select a hexagon on the globe to place the ${facilityType.replace('_', ' ')}.`);
-  }, []);
+  }, [setSelectingHexForBuilding, setAppTargetedHexIdForBuild, setShowTechnologyPanel, setContextMenu, setSelectedHexagonDetails]); // No game state dependencies here
 
   const handleClearTargetedHexIdForBuild = useCallback(() => {
     setAppTargetedHexIdForBuild(null);
-  }, []);
+  }, [setAppTargetedHexIdForBuild]); // No game state dependencies
 
   const handleBuildFacility = useCallback((facilityType: FacilityType, regionId: string, hexagonId?: string) => {
-    if (!gameEngineRef.current || !gameState) return;
-    const result = gameEngineRef.current.buildFacility(gameState, facilityType, regionId, hexagonId);
-    if (result.success && result.newState) {
-      setGameState(result.newState);
-      audioRef.current?.playAlert('success');
-      // console.log(`Building ${facilityType} in ${regionId}` + (hexagonId ? ` on ${hexagonId}` : ""));
-    } else {
-      audioRef.current?.playAlert('warning');
-      // console.warn(`Failed to build ${facilityType}: ${result.message}`);
-      // Optionally, show a toast to the user with result.message
-    }
-  }, [gameState]);
+    if (!isInitialized || !gameEngineRef.current || !audioRef.current) return;
+    const gameEngine = gameEngineRef.current;
+    const audio = audioRef.current;
+    setGameState(currentGS => {
+      if (!currentGS) return null;
+      const result = gameEngine.buildFacility(currentGS, facilityType, regionId, hexagonId);
+      if (result.success && result.newState) {
+        audio.playAlert('success');
+        return result.newState;
+      } else {
+        audio.playAlert('warning');
+        // console.warn(`Failed to build ${facilityType}: ${result.message}`);
+        return currentGS;
+      }
+    });
+  }, [isInitialized, gameEngineRef, audioRef, setGameState]); // gameState removed
 
   const handleUpgradeFacility = useCallback((facilityId: string, toFacilityType: FacilityType) => {
-    if (!gameEngineRef.current || !gameState) return;
-    const result = gameEngineRef.current.upgradeFacility(gameState, facilityId, toFacilityType);
-    if (result.success && result.newState) {
-      setGameState(result.newState);
-      audioRef.current?.playAlert('success');
-      // console.log(`Upgraded facility ${facilityId} to ${toFacilityType}`);
-    } else {
-      audioRef.current?.playAlert('warning');
-      // console.warn(`Failed to upgrade facility ${facilityId}: ${result.message}`);
-    }
-  }, [gameState]);
+    if (!isInitialized || !gameEngineRef.current || !audioRef.current) return;
+    const gameEngine = gameEngineRef.current;
+    const audio = audioRef.current;
+    setGameState(currentGS => {
+      if (!currentGS) return null;
+      const result = gameEngine.upgradeFacility(currentGS, facilityId, toFacilityType);
+      if (result.success && result.newState) {
+        audio.playAlert('success');
+        return result.newState;
+      } else {
+        audio.playAlert('warning');
+        // console.warn(`Failed to upgrade facility ${facilityId}: ${result.message}`);
+        return currentGS;
+      }
+    });
+  }, [isInitialized, gameEngineRef, audioRef, setGameState]); // gameState removed
   
   const handleModeChange = useCallback((mode: 'chaos' | 'peace' | 'neutral') => {
-    if (!gameState) return;
-    setGameState({ ...gameState, mode });
+    if (!isInitialized || !audioRef.current) return;
+    setGameState(gs => gs ? { ...gs, mode } : null);
     audioRef.current?.playAlert('success');
-  }, [gameState]);
+  }, [isInitialized, audioRef, setGameState]); // gameState removed
   
   const handleSpeedChange = useCallback((speed: number) => {
-    if (!gameState) return;
-    setGameState({ ...gameState, speed });
-  }, [gameState]);
+    if (!isInitialized) return;
+    setGameState(gs => gs ? { ...gs, speed } : null);
+  }, [isInitialized, setGameState]); // gameState removed
   
   const handleTogglePlay = useCallback(() => {
-    if (!gameState) return;
-    const newRunning = !gameState.running;
-    setGameState({ ...gameState, running: newRunning });
-    
-    if (newRunning) {
-      audioRef.current?.playAmbient();
-    } else {
-      audioRef.current?.stopAmbient();
-    }
-  }, [gameState]);
+    if (!isInitialized || !audioRef.current) return;
+    const audio = audioRef.current;
+    setGameState(gs => {
+      if (!gs) return null;
+      const newRunning = !gs.running;
+      if (newRunning) audio.playAmbient();
+      else audio.stopAmbient();
+      return { ...gs, running: newRunning };
+    });
+  }, [isInitialized, audioRef, setGameState]); // gameState removed
   
   const handleReset = useCallback(() => {
-    if (!gameEngineRef.current) return;
-    const newState = gameEngineRef.current.createInitialWorld();
+    if (!isInitialized || !gameEngineRef.current || !audioRef.current) return;
+    const gameEngine = gameEngineRef.current;
+    const audio = audioRef.current;
+    const newState = gameEngine.createInitialWorld();
     setGameState(newState);
-    audioRef.current?.stopAmbient();
-    audioRef.current?.playAlert('success');
-  }, []);
+    audio.stopAmbient();
+    audio.playAlert('success');
+  }, [isInitialized, gameEngineRef, audioRef, setGameState]); // gameState removed
   
   if (!isInitialized || !gameState) {
     return (
