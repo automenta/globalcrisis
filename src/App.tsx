@@ -142,7 +142,7 @@ export default function GlobalCrisisSimulator() {
     
     let lastTime = performance.now();
     
-    const gameLoop = (currentTime: number) => {
+    function gameLoop(currentTime: number) {
       const deltaTime = currentTime - lastTime;
       lastTime = currentTime;
       
@@ -199,7 +199,7 @@ export default function GlobalCrisisSimulator() {
       if (gameState && gameState.running) {
         animationRef.current = requestAnimationFrame(gameLoop);
       }
-    };
+    }
     
     // Start the loop only if all conditions are met
     if (isInitialized && gameState && gameState.running && gameEngineRef.current && earth3DRef.current && audioRef.current) {

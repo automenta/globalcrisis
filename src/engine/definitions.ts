@@ -299,7 +299,8 @@ export enum FacilityType {
   RESOURCE_EXTRACTOR = 'resource_extractor', // Generic extractor
   STRATEGIC_RESOURCE_NODE = 'strategic_resource_node', // Facility to tap into a specific hex resource
   DEFENSE_PLATFORM = 'defense_platform',
-  ADVANCED_RESEARCH_LAB = 'advanced_research_lab', // Added new type
+  ADVANCED_RESEARCH_LAB = 'advanced_research_lab',
+  POWER_PLANT = 'power_plant', // New facility for energy production
 }
 
 export interface FacilityEffect {
@@ -316,11 +317,12 @@ export interface PlanetaryFacilityDefinition {
   visual?: string; // Key for 3D model or icon
   maxPerRegion?: number;
   maxGlobal?: number;
+  constructionTime?: number; // Time in seconds (or game ticks) to build the facility
   upgrades?: {
     toFacilityType: FacilityType;
     cost: Record<string, number>; // Cost to perform this specific upgrade
     techRequired?: string; // TechId from Technology.ts
-    // constructionTime?: number; // Optional: time this upgrade takes
+    constructionTime?: number; // Optional: time this upgrade takes, distinct from initial construction
   }[];
 }
 
@@ -381,14 +383,26 @@ export const FACILITY_DEFINITIONS: Record<FacilityType, PlanetaryFacilityDefinit
   },
   [FacilityType.DEFENSE_PLATFORM]: {
     name: 'Defense Platform',
-    description: 'Provides defensive capabilities to the region.',
-    cost: { /* credits: 200 */ },
+    description: 'Provides defensive capabilities to the region and contributes to global defense readiness.',
+    cost: { credits: 200, energy: 50 }, // Added energy to initial cost as well
     effects: [
-      { stabilityModifier: 0.01 } // Small passive stability boost per tick
-      // Could also have active defense capabilities (e.g. intercept missiles - more complex)
+      { stabilityModifier: 0.01 }, // Small passive stability boost per tick
+      { resourceYield: { defense: 0.1, energy: -0.05 } } // Produces defense, consumes energy for upkeep
     ],
     visual: 'defense_turret',
     maxPerRegion: 1,
+    constructionTime: 20, // Takes 20 seconds to build
+  },
+  [FacilityType.POWER_PLANT]: {
+    name: 'Power Plant',
+    description: 'Generates energy required for advanced facilities and operations.',
+    cost: { credits: 200 },
+    effects: [
+      { resourceYield: { energy: 0.5 } } // Produces 0.5 energy per tick (game time second)
+    ],
+    visual: 'power_plant_visual', // Needs a visual key
+    maxPerRegion: 2, // Allow a couple per region
+    constructionTime: 15, // Takes 15 seconds to build
   }
 };
 
