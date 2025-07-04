@@ -1,10 +1,14 @@
 import * as THREE from 'three';
 import { GameState, WorldRegion, RegionEvent, EventType } from '../engine/GameEngine';
 
+export type StandardSatelliteType = 'military' | 'communication' | 'surveillance' | 'weapon' | 'civilian';
+export type SpecialSatelliteType = 'geo_scanner' | 'emp_pulser'; // New types
+export type SatelliteType = StandardSatelliteType | SpecialSatelliteType;
+
 export interface Satellite {
   id: string;
   name: string;
-  type: 'military' | 'communication' | 'surveillance' | 'weapon' | 'civilian';
+  type: SatelliteType;
   orbit: {
     radius: number;
     inclination: number;
@@ -372,17 +376,19 @@ export class Earth3D {
   }
   
   private createSatellites() {
-    const satelliteTypes = [
-      { type: 'military', count: 8, color: 0xff0000, radius: 3.5 },
-      { type: 'surveillance', count: 12, color: 0xffff00, radius: 4.0 },
-      { type: 'communication', count: 15, color: 0x00ff00, radius: 6.0 },
-      { type: 'weapon', count: 6, color: 0xff00ff, radius: 3.2 },
-      { type: 'civilian', count: 20, color: 0x0088ff, radius: 5.0 }
+    const satelliteTypes: { type: SatelliteType, count: number, color: number, radius: number }[] = [
+      { type: 'military', count: 6, color: 0xff0000, radius: 3.5 },
+      { type: 'surveillance', count: 10, color: 0xffff00, radius: 4.0 },
+      { type: 'communication', count: 12, color: 0x00ff00, radius: 6.0 },
+      { type: 'weapon', count: 4, color: 0xff00ff, radius: 3.2 },
+      { type: 'civilian', count: 15, color: 0x0088ff, radius: 5.0 },
+      { type: 'geo_scanner', count: 3, color: 0x00ffff, radius: 4.5 }, // Cyan color for geo_scanner
+      { type: 'emp_pulser', count: 2, color: 0xff8800, radius: 3.8 }   // Orange color for emp_pulser
     ];
     
     satelliteTypes.forEach(({ type, count, color, radius }) => {
       for (let i = 0; i < count; i++) {
-        const satellite = this.createSatellite(type as any, color, radius, i, count);
+        const satellite = this.createSatellite(type, color, radius, i, count);
         this.satellites.push(satellite);
         this.scene.add(satellite.mesh);
       }
@@ -404,72 +410,69 @@ export class Earth3D {
 
     // Type-specific parts
     let primaryPart: THREE.Mesh;
+    let panel1: THREE.Mesh, panel2: THREE.Mesh;
+
     switch (type) {
       case 'military':
       case 'weapon':
         primaryPart = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.03, 0.05, 8), material);
         primaryPart.position.z = 0.05;
-        this.setOriginalColor(primaryPart, color);
-        group.add(primaryPart);
-
-        const milPanel = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.02, 0.005), panelMaterial);
-        milPanel.position.x = 0.05;
-        milPanel.userData.isPanel = true;
-        const milPanel2 = milPanel.clone().translateX(-0.1);
-        milPanel2.userData.isPanel = true;
-        group.add(milPanel, milPanel2);
+        panel1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.02, 0.005), panelMaterial);
+        panel1.position.x = 0.05;
+        panel2 = panel1.clone().translateX(-0.1);
         break;
       case 'communication':
         primaryPart = new THREE.Mesh(new THREE.SphereGeometry(0.04, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2.5), material);
         primaryPart.position.z = 0.03;
         primaryPart.rotation.x = Math.PI / 1.5;
-        this.setOriginalColor(primaryPart, color);
-        group.add(primaryPart);
-
-        const commPanel = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.03, 0.005), panelMaterial);
-        commPanel.position.x = 0.08;
-        commPanel.userData.isPanel = true;
-        const commPanel2 = commPanel.clone().translateX(-0.16);
-        commPanel2.userData.isPanel = true;
-        group.add(commPanel, commPanel2);
+        panel1 = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.03, 0.005), panelMaterial);
+        panel1.position.x = 0.08;
+        panel2 = panel1.clone().translateX(-0.16);
         break;
       case 'surveillance':
         primaryPart = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.04, 16), material);
         primaryPart.position.z = -0.04;
         primaryPart.rotation.x = Math.PI / 2;
-        this.setOriginalColor(primaryPart, color);
-        group.add(primaryPart);
-
-        const survPanel = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.025, 0.005), panelMaterial);
-        survPanel.position.x = 0.06;
-        survPanel.userData.isPanel = true;
-        const survPanel2 = survPanel.clone().translateX(-0.12);
-        survPanel2.userData.isPanel = true;
-        group.add(survPanel, survPanel2);
+        panel1 = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.025, 0.005), panelMaterial);
+        panel1.position.x = 0.06;
+        panel2 = panel1.clone().translateX(-0.12);
+        break;
+      case 'geo_scanner': // Uses surveillance look with different color by default
+        primaryPart = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.05, 16), material); // Slightly thicker
+        primaryPart.position.z = -0.045;
+        primaryPart.rotation.x = Math.PI / 2;
+        panel1 = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.03, 0.005), panelMaterial);
+        panel1.position.x = 0.07;
+        panel2 = panel1.clone().translateX(-0.14);
+        break;
+      case 'emp_pulser': // Uses weapon look with different color by default
+        primaryPart = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), material); // Sphere instead of cylinder
+        primaryPart.position.z = 0.04;
+        panel1 = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.005), panelMaterial); // Smaller, squarish panels
+        panel1.position.x = 0.04;
+        panel2 = panel1.clone().translateX(-0.08);
         break;
       case 'civilian':
-      default:
+      default: // Default to civilian look
         primaryPart = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.08), material);
-        this.setOriginalColor(primaryPart, color);
-        // For civilian, the primary part might be the baseBody if it's colored, or a new colored mesh.
-        // If baseBody is the colored part:
-        // this.setOriginalColor(baseBody, color);
-        // baseBody.material = material; // Assign the colored material
-        group.add(primaryPart); // If primaryPart is different from baseBody. If baseBody is colored, this line would change.
-
-
-        const civPanel = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.03, 0.005), panelMaterial);
-        civPanel.position.x = 0.07;
-        civPanel.userData.isPanel = true;
-        const civPanel2 = civPanel.clone().translateX(-0.14);
-        civPanel2.userData.isPanel = true;
-        group.add(civPanel, civPanel2);
+        panel1 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.03, 0.005), panelMaterial);
+        panel1.position.x = 0.07;
+        panel2 = panel1.clone().translateX(-0.14);
         break;
+    }
+
+    this.setOriginalColor(primaryPart, color);
+    group.add(primaryPart);
+
+    if (panel1 && panel2) {
+        panel1.userData.isPanel = true;
+        panel2.userData.isPanel = true;
+        group.add(panel1, panel2);
     }
     
     const satellite: Satellite = {
       id: `${type}_${index}`,
-      name: `${type.toUpperCase()}-${index + 1}`,
+      name: `${type.toUpperCase().replace('_', ' ')}-${index + 1}`,
       type,
       orbit: {
         radius: orbitRadius,
@@ -478,20 +481,7 @@ export class Earth3D {
         phase: (index / total) * Math.PI * 2
       },
       position: new THREE.Vector3(),
-      mesh: group, // Assign the group as the mesh
-      active: true,
-      compromised: false
-    };
-      name: `${type.toUpperCase()}-${index + 1}`,
-      type,
-      orbit: {
-        radius: orbitRadius,
-        inclination: (Math.random() - 0.5) * Math.PI / 3,
-        speed: 0.001 + Math.random() * 0.002,
-        phase: (index / total) * Math.PI * 2
-      },
-      position: new THREE.Vector3(),
-      mesh,
+      mesh: group,
       active: true,
       compromised: false
     };

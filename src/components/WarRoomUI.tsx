@@ -15,7 +15,9 @@ import {
   Eye,
   Sword,
   Heart,
-  Leaf
+  Leaf,
+  ScanSearch, // For Geo Scanner
+  WifiOff // For EMP Pulse
 } from 'lucide-react';
 
 interface ContextMenuProps {
@@ -172,6 +174,30 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
               <Target className=\"w-3 h-3 mr-1\" />
               Destroy
             </Button>
+
+            {/* Special satellite actions */}
+            {satellite.type === 'geo_scanner' && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full justify-start text-xs text-cyan-400 border-cyan-700 hover:bg-cyan-900"
+                onClick={() => handleAction('geo_scan_area', satellite)}
+              >
+                <ScanSearch className="w-3 h-3 mr-1" />
+                Scan Area Resources
+              </Button>
+            )}
+            {satellite.type === 'emp_pulser' && (
+              <Button
+                size="sm"
+                variant="destructive"
+                className="w-full justify-start text-xs"
+                onClick={() => handleAction('emp_pulse_region', satellite)}
+              >
+                <WifiOff className="w-3 h-3 mr-1" />
+                Fire EMP Pulse
+              </Button>
+            )}
           </>
         )}
         

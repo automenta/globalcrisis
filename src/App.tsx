@@ -1,9 +1,20 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { GameEngine, GameState, EventType, WorldRegion, RegionEvent } from './engine/GameEngine';
+import * as THREE from 'three'; // For Vector3 type if needed for hexCenter
+import { GameEngine, GameState, EventType, WorldRegion, RegionEvent, PlanetaryFacility } from './engine/GameEngine';
+import { StrategicResourceType } from './engine/definitions';
 import { Earth3D, Satellite, ContextMenu as ContextMenuType } from './components/Earth3D';
 import { ContextMenu, TacticalOverlay } from './components/WarRoomUI';
+import { HexagonInfoPanel } from './components/HexagonInfoPanel'; // Import the new panel
 import { Button } from '@/components/ui/button';
 import { AlertTriangle, Power } from 'lucide-react';
+
+interface HexagonDetailsForPanel {
+  id: string;
+  strategicResource?: StrategicResourceType | null;
+  facilities: PlanetaryFacility[];
+  events: RegionEvent[];
+  // position: { x: number, y: number }; // Screen position for the panel
+}
 
 interface AudioSystem {
   context: AudioContext;
@@ -94,6 +105,8 @@ export default function GlobalCrisisSimulator() {
     type: 'region',
     target: null
   });
+  const [selectedHexagonDetails, setSelectedHexagonDetails] = useState<HexagonDetailsForPanel | null>(null);
+  const [hexagonPanelPosition, setHexagonPanelPosition] = useState({ x: 0, y: 0 });
   const [isInitialized, setIsInitialized] = useState(false);
   const [lastEventCount, setLastEventCount] = useState(0);
   
@@ -140,6 +153,40 @@ export default function GlobalCrisisSimulator() {
         });
       };
       
+      earth3DRef.current.onHexagonClick = (hexagonId, _hexagonCenter, clickX, clickY) => {
+        if (!gameState || !gameEngineRef.current) return;
+
+        const strategicResource = gameState.hexagonStrategicResources[hexagonId];
+        const facilitiesOnHex = gameState.activeFacilities.filter(f => f.hexagonId === hexagonId);
+
+        // Find events affecting this hexagon. This is an approximation.
+        // A more accurate way would be if events stored which hexes they are on,
+        // or to use a spatial query. For now, check if event x,y is near hex center.
+        // This requires hex center data to be available or passed from Earth3D.
+        // For simplicity, we'll pass an empty array for events for now, or use region events.
+        // const eventsOnHex = gameState.activeEvents.filter(event => {
+        //   // Requires a way to map event x,y to a hex or check proximity to hexCenter
+        //   return false; // Placeholder
+        // });
+        // For now, let's assume events are not hex-specific in this panel, or show region events.
+        // This detail needs refinement if hex-specific event display is crucial.
+
+        setSelectedHexagonDetails({
+          id: hexagonId,
+          strategicResource,
+          facilities: facilitiesOnHex,
+          events: [], // Placeholder for hex-specific events
+        });
+        // Position the panel near the click, ensuring it's within bounds
+        setHexagonPanelPosition({
+            x: Math.min(clickX + 15, window.innerWidth - 300), // Ensure panel doesn't go off-screen right
+            y: Math.min(clickY + 15, window.innerHeight - 250) // Ensure panel doesn't go off-screen bottom
+        });
+
+        // Close context menu if it's open
+        setContextMenu(prev => ({ ...prev, visible: false }));
+      };
+
       setIsInitialized(true);
       
     } catch (error) {
@@ -245,17 +292,28 @@ export default function GlobalCrisisSimulator() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
   
-  // Close context menu on click outside
+  // Close context menu and hexagon panel on click outside
   useEffect(() => {
-    const handleClickOutside = () => {
-      setContextMenu(prev => ({ ...prev, visible: false }));
+    const handleClickOutside = (event: MouseEvent) => {
+      // Check if the click is outside the context menu
+      const contextMenuElement = document.querySelector('.fixed.z-50'); // Class from ContextMenu component
+      if (contextMenu.visible && contextMenuElement && !contextMenuElement.contains(event.target as Node)) {
+        setContextMenu(prev => ({ ...prev, visible: false }));
+      }
+
+      // Check if the click is outside the hexagon info panel
+      const hexPanelElement = document.querySelector('.bg-black\\/85.border-blue-700'); // More specific selector for HexPanel
+      if (selectedHexagonDetails && hexPanelElement && !hexPanelElement.contains(event.target as Node)) {
+        setSelectedHexagonDetails(null);
+      }
     };
     
-    if (contextMenu.visible) {
-      document.addEventListener('click', handleClickOutside);
-      return () => document.removeEventListener('click', handleClickOutside);
+    // Add listener if either menu or panel is visible
+    if (contextMenu.visible || selectedHexagonDetails) {
+      document.addEventListener('mousedown', handleClickOutside); // Use mousedown to catch before click on other elements
+      return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [contextMenu.visible]);
+  }, [contextMenu.visible, selectedHexagonDetails]);
   
   const handleContextMenuAction = useCallback((action: string, target?: any) => {
     if (!gameEngineRef.current || !gameState || !earth3DRef.current) return;
@@ -405,6 +463,15 @@ export default function GlobalCrisisSimulator() {
         onClose={() => setContextMenu(prev => ({ ...prev, visible: false }))}
         onAction={handleContextMenuAction}
       />
+
+      {/* Hexagon Info Panel */}
+      {selectedHexagonDetails && (
+        <HexagonInfoPanel
+          hexagon={selectedHexagonDetails}
+          onClose={() => setSelectedHexagonDetails(null)}
+          position={hexagonPanelPosition}
+        />
+      )}
       
       {/* Emergency Alert System */}
       {gameState.globalSuffering > 80 && (
