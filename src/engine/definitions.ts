@@ -125,7 +125,7 @@ export const THREAT_DEFINITIONS: Record<EventType, ThreatDefinition> = {
     name: 'Climate Disaster',
     description: 'Extreme weather event (e.g., superstorm, mega-drought) causing widespread destruction.',
     // cost: 0, // Naturally occurring or result of cumulative environmental damage
-    effects: { environment: -60, stability: -30, population: -1000000 },
+    effects: { environment: -60, stability: -30, population: -1000000, [StrategicResourceType.WATER]: -50, [StrategicResourceType.FOOD]: -30 }, // Drought/floods impact water and food
     duration: 50,
     visual: 'storm_effects',
     color: 0x00ffff,
@@ -305,10 +305,12 @@ export enum StrategicResourceType {
   ANTIMATTER_CELLS = 'antimatter_cells', // High-density power for advanced tech
   EXOTIC_ISOTOPES = 'exotic_isotopes', // Used in fusion power or specialized weaponry
   DATA_CONDUITS = 'data_conduits', // Represents high-capacity data processing/transmission nodes
-  BIOPRECURSORS = 'bioprecursors' // For advanced biological engineering or terraforming
+  BIOPRECURSORS = 'bioprecursors', // For advanced biological engineering or terraforming
+  WATER = 'water', // Essential for population, agriculture, some industries
+  FOOD = 'food'    // Essential for population survival
 }
 
-// General resources can still be strings in GameState.globalResources
+// General resources can still be strings in GameState.globalResources (like 'credits', 'research', 'energy', 'defense')
 // This enum is for specific, map-located strategic resources.
 
 // Defines the types of facilities players can build.
@@ -358,8 +360,11 @@ export interface PlanetaryFacilityDefinition {
     gdpMultiplier?: number; // Multiplicative boost to regional GDP (e.g., 1.05 for 5% boost, applied once or per tick based on engine logic)
     regionalProductionModifier?: Partial<Record<StrategicResourceType, number>>; // Modifies the region's base production of strategic resources. e.g., { RARE_METALS: 1.1 } for a 10% boost.
     regionalDemandModifier?: Partial<Record<StrategicResourceType, number>>; // Modifies the region's base demand for strategic resources. e.g., { ANTIMATTER_CELLS: 0.9 } for a 10% reduction in demand.
-    // employmentChange?: number; // Change in regional employment figures
+    // employmentChange?: number; // Change in regional employment figures. To be added in Demographics step.
     // pollutionOutput?: number; // Amount of pollution generated per tick
+    primarySector?: EconomicSectorType; // The main economic sector this facility belongs to or primarily boosts
+    sectorEfficiencyBoost?: Partial<Record<EconomicSectorType, number>>; // e.g. { INDUSTRY: 0.05 } for a 5% boost to industry efficiency
+    sectorOutputBoost?: Partial<Record<EconomicSectorType, number>>; // e.g. { ENERGY: 100 } for a flat output boost to energy sector
   };
   maintenanceCost?: Partial<Record<StrategicResourceType | string, number>>; // Resources consumed per tick for upkeep
 }
@@ -393,6 +398,10 @@ export interface RegionalDevelopmentProgramDefinition {
     delayTicks?: number; // Delay after program start or end
     isNegativeEvent?: boolean; // To quickly identify if it's a downside
   }[];
+  demographicEffects?: { // Effects on regional demographics
+    educationLevelChange?: number; // Direct change to education level per tick or one-time
+    unemploymentChange?: number; // Direct change to unemployment figures (e.g. job creation programs)
+  };
 }
 
 // Defines the types of strategic policies a player can enact.
@@ -402,6 +411,9 @@ export enum PolicyType {
   RAPID_MILITARIZATION = 'rapid_militarization',
   OPEN_SOCIETY = 'open_society', // Focus on research, global collaboration, stability
   CLOSED_SOCIETY = 'closed_society', // Focus on defense, internal control, slower research but more resilient to some threats
+  ENVIRONMENTAL_REGULATION = 'environmental_regulation',
+  GLOBAL_TRADE_INITIATIVE = 'global_trade_initiative',
+  EDUCATION_SUBSIDIES = 'education_subsidies',
 }
 
 // Defines the effects, costs, and requirements of a strategic policy.
@@ -435,6 +447,84 @@ export interface PolicyDefinition {
   mutuallyExclusivePolicies?: PolicyType[]; // Policies that cannot be active at the same time
 }
 
+export const POLICY_DEFINITIONS: Record<PolicyType, PolicyDefinition> = {
+  [PolicyType.SUSTAINABLE_DEVELOPMENT]: {
+    name: "Sustainable Development",
+    description: "Balances economic growth with environmental protection and social well-being.",
+    adoptionCost: { credits: 200 },
+    maintenanceCostPerTick: { credits: 2 },
+    globalPlayerModifiers: { researchSpeedModifier: 1.05 },
+    regionalModifiers: { environmentChangePerTick: 0.01, stabilityBonusPerTick: 0.005 },
+    mutuallyExclusivePolicies: [PolicyType.AGGRESSIVE_RESOURCE_EXPLOITATION]
+  },
+  [PolicyType.AGGRESSIVE_RESOURCE_EXPLOITATION]: {
+    name: "Aggressive Resource Exploitation",
+    description: "Prioritizes rapid resource extraction and industrial output, often at environmental cost.",
+    adoptionCost: { credits: 100 },
+    maintenanceCostPerTick: { credits: 1 },
+    globalPlayerModifiers: { resourceIncomeModifier: { credits: 1.1 } }, // Example: +10% credit income
+    regionalModifiers: { environmentChangePerTick: -0.02, facilityConstructionSpeedModifier: 1.1 },
+    mutuallyExclusivePolicies: [PolicyType.SUSTAINABLE_DEVELOPMENT, PolicyType.ENVIRONMENTAL_REGULATION]
+  },
+  [PolicyType.RAPID_MILITARIZATION]: {
+    name: "Rapid Militarization",
+    description: "Focuses national efforts on building a strong military and defense infrastructure.",
+    adoptionCost: { credits: 300, [StrategicResourceType.RARE_METALS]: 20 },
+    maintenanceCostPerTick: { credits: 5, [StrategicResourceType.RARE_METALS]: 0.1 },
+    globalPlayerModifiers: { facilityUpkeepModifier: 1.1 }, // Increased upkeep for all facilities (resources diverted)
+    // regionalModifiers: { unitProductionSpeed: 1.2 } // Example if units were a concept
+  },
+  [PolicyType.OPEN_SOCIETY]: {
+    name: "Open Society",
+    description: "Promotes freedom, collaboration, and innovation, boosting research and global standing but potentially increasing vulnerability.",
+    adoptionCost: { credits: 150 },
+    maintenanceCostPerTick: { credits: 1 },
+    globalPlayerModifiers: { researchSpeedModifier: 1.15, diplomaticInfluenceModifier: 1.1 },
+    eventEffectModifiers: [ { eventType: EventType.PROPAGANDA, severityModifier: 1.2 } ], // More vulnerable to propaganda
+    mutuallyExclusivePolicies: [PolicyType.CLOSED_SOCIETY]
+  },
+  [PolicyType.CLOSED_SOCIETY]: {
+    name: "Closed Society",
+    description: "Emphasizes internal security, control, and self-reliance, making the nation more resilient to some external threats but slower to innovate.",
+    adoptionCost: { credits: 150 },
+    maintenanceCostPerTick: { credits: 3 },
+    globalPlayerModifiers: { researchSpeedModifier: 0.9, diplomaticInfluenceModifier: 0.8 },
+    regionalModifiers: { stabilityBonusPerTick: 0.01 },
+    eventEffectModifiers: [ { eventType: EventType.PROPAGANDA, severityModifier: 0.7 } ], // More resistant to propaganda
+    mutuallyExclusivePolicies: [PolicyType.OPEN_SOCIETY]
+  },
+  [PolicyType.ENVIRONMENTAL_REGULATION]: {
+    name: "Environmental Regulation",
+    description: "Implements strict standards to protect the environment, potentially slowing industrial output but improving ecological health and global standing.",
+    adoptionCost: { credits: 250 },
+    maintenanceCostPerTick: { credits: 3 },
+    globalPlayerModifiers: { /* Potentially a small hit to overall industrial efficiency if not balanced by tech */ },
+    regionalModifiers: { environmentChangePerTick: 0.02, pollutionFromIndustryModifier: 0.75 }, // 25% less pollution
+     // Could make some industrial facilities less efficient or more costly if not upgraded with green tech
+    mutuallyExclusivePolicies: [PolicyType.AGGRESSIVE_RESOURCE_EXPLOITATION]
+  },
+  [PolicyType.GLOBAL_TRADE_INITIATIVE]: {
+    name: "Global Trade Initiative",
+    description: "Focuses on fostering international trade, improving resource exchange efficiency and economic output.",
+    adoptionCost: { credits: 200, [StrategicResourceType.DATA_CONDUITS]: 10 },
+    maintenanceCostPerTick: { credits: 2 },
+    globalPlayerModifiers: { resourceIncomeModifier: {credits: 1.05} }, // General small boost to credit income
+    // This policy would ideally interact with a global market system or inter-player trade mechanics.
+    // For now, can simulate a small boost to efficiency of resource-producing sectors.
+    // regionalModifiers: { sectorEfficiencyBoost: { INDUSTRY: 0.01, SERVICES: 0.01 } } // Placeholder
+  },
+  [PolicyType.EDUCATION_SUBSIDIES]: {
+    name: "Education Subsidies",
+    description: "Invests heavily in education, improving research capabilities and workforce skills over time.",
+    adoptionCost: { credits: 300 },
+    maintenanceCostPerTick: { credits: 4 },
+    globalPlayerModifiers: { researchSpeedModifier: 1.05 }, // Small direct boost to research
+    // Primary effect would be a slow increase to regional educationLevel, handled in processPlayerProgramsAndPolicies
+    // This is a new type of effect not directly fitting global/regional modifiers per tick in the same way.
+    // We will need to handle this in the GameEngine's policy processing logic.
+  }
+};
+
 // Central registry for all facility definitions.
 // This allows for easy addition and modification of facility types.
 export const FACILITY_DEFINITIONS: Record<FacilityType, PlanetaryFacilityDefinition> = {
@@ -455,7 +545,10 @@ export const FACILITY_DEFINITIONS: Record<FacilityType, PlanetaryFacilityDefinit
       }
     ],
     economicImpact: {
-      regionalDemandModifier: { [StrategicResourceType.DATA_CONDUITS]: 1.01 } // Slightly increases demand for data conduits
+      regionalDemandModifier: { [StrategicResourceType.DATA_CONDUITS]: 1.01 }, // Slightly increases demand for data conduits
+      primarySector: EconomicSectorType.SERVICES, // Assuming research primarily boosts the knowledge/service economy
+      sectorEfficiencyBoost: { [EconomicSectorType.SERVICES]: 0.01 }, // Small boost to service sector efficiency
+      sectorOutputBoost: { [EconomicSectorType.SERVICES]: 5 } // Small flat output boost to services
     },
     maintenanceCost: { energy: 0.02 }
   },
@@ -468,8 +561,11 @@ export const FACILITY_DEFINITIONS: Record<FacilityType, PlanetaryFacilityDefinit
     maxPerRegion: 1,
     constructionTime: 30,
     economicImpact: {
-        gdpBoostPerTick: 0.1,
-        regionalDemandModifier: { [StrategicResourceType.DATA_CONDUITS]: 1.05, [StrategicResourceType.EXOTIC_ISOTOPES]: 1.02 }
+        gdpBoostPerTick: 0.1, // Keeps overall GDP impact
+        regionalDemandModifier: { [StrategicResourceType.DATA_CONDUITS]: 1.05, [StrategicResourceType.EXOTIC_ISOTOPES]: 1.02 },
+        primarySector: EconomicSectorType.SERVICES, // Advanced research is highly service-oriented
+        sectorEfficiencyBoost: { [EconomicSectorType.SERVICES]: 0.05, [EconomicSectorType.INDUSTRY]: 0.02 }, // Boosts services significantly, industry moderately
+        sectorOutputBoost: { [EconomicSectorType.SERVICES]: 20 }
     },
     maintenanceCost: { credits: 0.1, energy: 0.1, [StrategicResourceType.RARE_METALS]: 0.01 }
   },
@@ -482,8 +578,10 @@ export const FACILITY_DEFINITIONS: Record<FacilityType, PlanetaryFacilityDefinit
     maxPerRegion: 2,
     constructionTime: 15,
     economicImpact: {
-        gdpBoostPerTick: 0.02, // Small boost to regional GDP
-        regionalProductionModifier: { [StrategicResourceType.RARE_METALS]: 1.01 } // Implies general extraction efforts might uncover some basic strategic resources for the region
+        gdpBoostPerTick: 0.02,
+        regionalProductionModifier: { [StrategicResourceType.RARE_METALS]: 1.01 }, // General extraction helps regional strategics
+        primarySector: EconomicSectorType.INDUSTRY, // Resource extraction is an industrial activity
+        sectorOutputBoost: { [EconomicSectorType.INDUSTRY]: 10 } // Directly boosts industrial output slightly
     },
     maintenanceCost: { energy: 0.01 }
   },
@@ -499,8 +597,10 @@ export const FACILITY_DEFINITIONS: Record<FacilityType, PlanetaryFacilityDefinit
     // but could also slightly boost related regional industries.
     economicImpact: {
         gdpBoostPerTick: 0.05,
-        // Example: If it's a RARE_METALS node, it might slightly increase regional production capability of it.
-        // This needs careful handling in GameEngine to link to the specific resource type.
+        primarySector: EconomicSectorType.INDUSTRY, // Specialized extraction is industrial
+        // Specific sector boosts for strategic nodes might depend on the resource type,
+        // handled in updateFacility/updateRegion logic if needed, or generalized here.
+        sectorOutputBoost: { [EconomicSectorType.INDUSTRY]: 15 } // General boost to industry from having strategic materials
     },
     maintenanceCost: { credits: 0.05, energy: 0.05 }
   },
@@ -516,8 +616,11 @@ export const FACILITY_DEFINITIONS: Record<FacilityType, PlanetaryFacilityDefinit
     maxPerRegion: 1, // Only one major platform per region for a player
     constructionTime: 20,
     economicImpact: {
-        gdpBoostPerTick: 0.01, // Military spending can stimulate local economy slightly
-        regionalDemandModifier: { [StrategicResourceType.RARE_METALS]: 1.01 } // Consumes some regional metals for upkeep/ammo
+        gdpBoostPerTick: 0.01,
+        regionalDemandModifier: { [StrategicResourceType.RARE_METALS]: 1.01 },
+        primarySector: EconomicSectorType.SERVICES, // Defense can be seen as a government service
+        sectorOutputBoost: { [EconomicSectorType.SERVICES]: 5 }, // Contribution to the service sector (e.g. security)
+        sectorEfficiencyBoost: { [EconomicSectorType.INDUSTRY]: 0.01 } // Secure environment might slightly boost industrial confidence/efficiency
     },
     maintenanceCost: { credits: 0.02, energy: 0.08 } // Consumes more energy
   },
@@ -531,10 +634,11 @@ export const FACILITY_DEFINITIONS: Record<FacilityType, PlanetaryFacilityDefinit
     constructionTime: 15,
     economicImpact: {
       gdpBoostPerTick: 0.03,
-      // Power plants might increase demand for fuel-like resources if those were modeled,
-      // or slightly increase local industrial activity.
-      regionalProductionModifier: { [StrategicResourceType.RARE_METALS]: 1.01 }, // e.g. better energy access helps refine metals
-      regionalDemandModifier: { [StrategicResourceType.EXOTIC_ISOTOPES]: 1.01 } // Some advanced plants might use isotopes
+      primarySector: EconomicSectorType.ENERGY, // Directly contributes to the Energy sector
+      sectorOutputBoost: { [EconomicSectorType.ENERGY]: 50 }, // Significant output boost to energy
+      sectorEfficiencyBoost: { [EconomicSectorType.INDUSTRY]: 0.03, [EconomicSectorType.SERVICES]: 0.02 }, // Reliable energy boosts other sectors
+      regionalProductionModifier: { [StrategicResourceType.RARE_METALS]: 1.01 },
+      regionalDemandModifier: { [StrategicResourceType.EXOTIC_ISOTOPES]: 1.01 }
     },
     maintenanceCost: { credits: 0.03 }
   }

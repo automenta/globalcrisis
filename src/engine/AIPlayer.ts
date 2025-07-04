@@ -59,8 +59,25 @@ export class AIPlayer {
         const currentDefense = playerState.globalResources.defense || 0;
         const defensePlatforms = playerState.activeFacilities.filter(f => f.type === FacilityType.DEFENSE_PLATFORM).length;
         if (currentDefense < 50 && defensePlatforms < 1) { // Example: build if defense score < 50 and less than 1 platform
-            this.log(`Low defense (${currentDefense}), considering Defense Platform. Have ${defensePlatforms}.`);
+            // this.log(`Low defense (${currentDefense}), considering Defense Platform. Have ${defensePlatforms}.`); // Less verbose
             currentGameState = this.tryBuildFacility(currentGameState, playerState, FacilityType.DEFENSE_PLATFORM);
+        }
+
+        // Food and Water management:
+        // For now, AI doesn't build specific facilities for these, but it should be aware of shortages.
+        // This awareness can be used later to influence policy or program choices.
+        const foodLevel = playerState.globalResources[StrategicResourceType.FOOD] || 0;
+        const waterLevel = playerState.globalResources[StrategicResourceType.WATER] || 0;
+        const netFoodChange = this.calculateNetResourceChange(playerState, StrategicResourceType.FOOD, currentGameState);
+        const netWaterChange = this.calculateNetResourceChange(playerState, StrategicResourceType.WATER, currentGameState);
+
+        if (foodLevel < 50 && netFoodChange < 0) {
+             this.log(`Critically low on Food: ${foodLevel.toFixed(2)}, Net change: ${netFoodChange.toFixed(2)}.`);
+             // Future: AI might prioritize agriculture-boosting programs or policies.
+        }
+        if (waterLevel < 50 && netWaterChange < 0) {
+            this.log(`Critically low on Water: ${waterLevel.toFixed(2)}, Net change: ${netWaterChange.toFixed(2)}.`);
+            // Future: AI might prioritize water-related programs or policies.
         }
 
 
@@ -95,14 +112,16 @@ export class AIPlayer {
         // 3. Strategic Resource Acquisition
         currentGameState = this.tryAcquireStrategicResources(currentGameState, playerState);
 
-        // 4. Consider Regional Development Programs (very basic)
-        if (Math.random() < 0.01) { // Low chance each decision cycle to consider this
-            currentGameState = this.tryRegionalDevelopmentProgram(currentGameState, playerState);
+        // 4. Consider Regional Development Programs
+        // AI now considers programs more intelligently based on regional needs (demographics, sector performance)
+        if (Math.random() < 0.02) { // Slightly higher chance to consider programs
+            currentGameState = this.tryConsiderRegionalProgram(currentGameState, playerState);
         }
 
-        // 5. Consider Enacting a Policy (very basic)
-        if (Math.random() < 0.01) { // Low chance each decision cycle
-            currentGameState = this.tryEnactPolicy(currentGameState, playerState);
+        // 5. Consider Enacting a Policy
+        // AI now considers policies more intelligently based on overall state (resource shortages, research needs)
+        if (Math.random() < 0.02) { // Slightly higher chance to consider policies
+            currentGameState = this.tryConsiderPolicy(currentGameState, playerState);
         }
 
         return currentGameState;
@@ -251,75 +270,148 @@ export class AIPlayer {
         return netChange; // This is net change per game tick (second) at current game speed=1
     }
 
-    private tryRegionalDevelopmentProgram(gameState: GameState, playerState: PlayerState): GameState {
-        // Simplistic: Pick a random available program and a random region.
-        // A real AI would analyze regions and program benefits.
-        const availablePrograms = Object.values(RegionalDevelopmentProgramType);
-        if (availablePrograms.length === 0) return gameState;
+    private tryConsiderRegionalProgram(gameState: GameState, playerState: PlayerState): GameState {
+        // More intelligent program selection
+        let bestProgram: RegionalDevelopmentProgramType | null = null;
+        let targetRegionId: string | null = null;
+        let maxScore = -Infinity;
 
-        const randomProgramType = availablePrograms[Math.floor(Math.random() * availablePrograms.length)];
-        const programDef = REGIONAL_DEVELOPMENT_PROGRAM_DEFINITIONS[randomProgramType];
-        if (!programDef) return gameState;
+        for (const region of gameState.regions) {
+            if (playerState.activeRegionalPrograms[region.id]) continue; // Program already active here
 
-        // Check if player can afford
-        const costs = programDef.cost || {};
-        let canAfford = true;
-        for (const resource in costs) {
-            if ((playerState.globalResources[resource] || 0) < costs[resource as keyof typeof costs]) {
-                canAfford = false;
-                break;
-            }
-        }
-        if (!canAfford) return gameState;
+            // Analyze regional needs
+            const educationNeed = 100 - region.demographics.educationLevel; // Higher need if education is low
+            const unemploymentRate = region.demographics.unemployedPopulation / Math.max(1, region.demographics.workingAgePopulation);
+            const stabilityDeficit = 100 - region.stability;
 
-        const randomRegion = gameState.regions[Math.floor(Math.random() * gameState.regions.length)];
-        if (playerState.activeRegionalPrograms[randomRegion.id]) {
-            return gameState; // Program already active in this randomly chosen region
-        }
+            // Evaluate potential programs
+            for (const progTypeStr in REGIONAL_DEVELOPMENT_PROGRAM_DEFINITIONS) {
+                const progType = progTypeStr as RegionalDevelopmentProgramType;
+                const progDef = REGIONAL_DEVELOPMENT_PROGRAM_DEFINITIONS[progType];
+                if (!progDef) continue;
 
-        this.log(`Considering initiating ${programDef.name} in ${randomRegion.name}`);
-        const result = this.gameEngine.initiateRegionalDevelopmentProgram(gameState, this.id, randomRegion.id, randomProgramType);
-        if (result.success && result.newState) {
-            this.log(`Successfully initiated ${programDef.name} in ${randomRegion.name}.`);
-            return result.newState;
-        }
-        return gameState;
-    }
+                let score = Math.random() * 10; // Base random chance + small preference
 
-    private tryEnactPolicy(gameState: GameState, playerState: PlayerState): GameState {
-        // Simplistic: Pick a random available policy the AI doesn't have yet.
-        const availablePolicies = Object.values(PolicyType).filter(pType => !playerState.activePolicies.has(pType));
-        if (availablePolicies.length === 0) return gameState;
+                // Check affordability
+                let canAfford = true;
+                const costs = progDef.cost || {};
+                for (const resource in costs) {
+                    if ((playerState.globalResources[resource] || 0) < costs[resource as keyof typeof costs]) {
+                        canAfford = false;
+                        break;
+                    }
+                }
+                if (!canAfford) continue;
 
-        const randomPolicyType = availablePolicies[Math.floor(Math.random() * availablePolicies.length)];
-        const policyDef = POLICY_DEFINITIONS[randomPolicyType];
-        if (!policyDef) return gameState;
+                // Simple scoring based on needs and program effects
+                if (progDef.demographicEffects?.educationLevelChange && progDef.demographicEffects.educationLevelChange > 0) {
+                    score += educationNeed * 0.5;
+                }
+                if (progDef.demographicEffects?.unemploymentChange && progDef.demographicEffects.unemploymentChange < 0) { // Negative change means reduces unemployment
+                    score += unemploymentRate * 50; // Higher score if high unemployment and program helps
+                }
+                if (progDef.effectsPerTick?.stability && progDef.effectsPerTick.stability > 0) {
+                    score += stabilityDeficit * 0.3;
+                }
+                 if (progType === RegionalDevelopmentProgramType.INDUSTRIAL_EXPANSION) {
+                    // Prefer if industry sector is lagging or if high unemployment
+                    const industryOutput = region.economicSectors.industry?.output || 0;
+                    const totalOutput = Object.values(region.economicSectors).reduce((s, sec) => s + sec.output, 1);
+                    if (industryOutput / totalOutput < 0.2) score += 20; // If industry is less than 20% of economy
+                    if (unemploymentRate > 0.15) score += 15;
+                }
 
-        // Check affordability for adoption
-        const adoptionCosts = policyDef.adoptionCost || {};
-        let canAffordAdoption = true;
-        for (const resource in adoptionCosts) {
-             if ((playerState.globalResources[resource] || 0) < adoptionCosts[resource as keyof typeof adoptionCosts]) {
-                canAffordAdoption = false;
-                break;
-            }
-        }
-        if (!canAffordAdoption) return gameState;
 
-        // Check if mutually exclusive with any active policy
-        if (policyDef.mutuallyExclusivePolicies) {
-            for (const exclusiveType of policyDef.mutuallyExclusivePolicies) {
-                if (playerState.activePolicies.has(exclusiveType)) {
-                    return gameState; // Cannot enact due to active mutually exclusive policy
+                if (score > maxScore) {
+                    maxScore = score;
+                    bestProgram = progType;
+                    targetRegionId = region.id;
                 }
             }
         }
 
-        this.log(`Considering enacting policy: ${policyDef.name}`);
-        const result = this.gameEngine.enactPolicy(gameState, this.id, randomPolicyType);
-        if (result.success && result.newState) {
-            this.log(`Successfully enacted policy: ${policyDef.name}.`);
-            return result.newState;
+        if (bestProgram && targetRegionId) {
+            const programDef = REGIONAL_DEVELOPMENT_PROGRAM_DEFINITIONS[bestProgram!];
+            this.log(`AI decided to initiate ${programDef.name} in region ${targetRegionId} (Score: ${maxScore.toFixed(2)})`);
+            const result = this.gameEngine.initiateRegionalDevelopmentProgram(gameState, this.id, targetRegionId, bestProgram);
+            if (result.success && result.newState) {
+                this.log(`Successfully initiated ${programDef.name}.`);
+                return result.newState;
+            }
+        }
+        return gameState;
+    }
+
+    private tryConsiderPolicy(gameState: GameState, playerState: PlayerState): GameState {
+        let bestPolicy: PolicyType | null = null;
+        let maxScore = -Infinity;
+
+        const foodShortage = (playerState.globalResources[StrategicResourceType.FOOD] || 0) < 50 && this.calculateNetResourceChange(playerState, StrategicResourceType.FOOD, gameState) < 0;
+        const waterShortage = (playerState.globalResources[StrategicResourceType.WATER] || 0) < 50 && this.calculateNetResourceChange(playerState, StrategicResourceType.WATER, gameState) < 0;
+        const researchSlow = (playerState.globalResources.research || 0) < 20; // Example: if research points per tick is low
+
+        for (const policyTypeStr in POLICY_DEFINITIONS) {
+            const policyType = policyTypeStr as PolicyType;
+            if (playerState.activePolicies.has(policyType)) continue;
+
+            const policyDef = POLICY_DEFINITIONS[policyType];
+            if (!policyDef) continue;
+
+            let score = Math.random() * 10; // Base random chance
+
+            // Check affordability
+            const adoptionCosts = policyDef.adoptionCost || {};
+            let canAffordAdoption = true;
+            for (const resource in adoptionCosts) {
+                 if ((playerState.globalResources[resource] || 0) < adoptionCosts[resource as keyof typeof adoptionCosts]) {
+                    canAffordAdoption = false;
+                    break;
+                }
+            }
+            if (!canAffordAdoption) continue;
+
+            // Check mutual exclusivity
+            let exclusiveConflict = false;
+            if (policyDef.mutuallyExclusivePolicies) {
+                for (const exclusiveType of policyDef.mutuallyExclusivePolicies) {
+                    if (playerState.activePolicies.has(exclusiveType)) {
+                        exclusiveConflict = true;
+                        break;
+                    }
+                }
+            }
+            if (exclusiveConflict) continue;
+
+            // Score policies based on current game state
+            if (policyType === PolicyType.EDUCATION_SUBSIDIES && researchSlow) {
+                score += 30; // Prioritize if research is slow
+            }
+            if (policyType === PolicyType.SUSTAINABLE_DEVELOPMENT && (foodShortage || waterShortage)) {
+                 // Sustainable dev might imply better food/water security through environment
+                score += 20;
+            }
+             if (policyType === PolicyType.ENVIRONMENTAL_REGULATION && gameState.globalEnvironment < 50) {
+                score += 25; // If global environment is suffering
+            }
+            if (policyType === PolicyType.AGGRESSIVE_RESOURCE_EXPLOITATION && (playerState.globalResources.credits || 0) < 500) {
+                score += 20; // If low on credits
+            }
+
+
+            if (score > maxScore) {
+                maxScore = score;
+                bestPolicy = policyType;
+            }
+        }
+
+        if (bestPolicy) {
+            const policyDef = POLICY_DEFINITIONS[bestPolicy!];
+            this.log(`AI decided to enact policy: ${policyDef.name} (Score: ${maxScore.toFixed(2)})`);
+            const result = this.gameEngine.enactPolicy(gameState, this.id, bestPolicy);
+            if (result.success && result.newState) {
+                this.log(`Successfully enacted policy: ${policyDef.name}.`);
+                return result.newState;
+            }
         }
         return gameState;
     }

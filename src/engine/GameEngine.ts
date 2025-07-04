@@ -17,10 +17,36 @@ export interface WorldRegion {
   color: [number, number, number]; // Color for map display
   events: RegionEvent[]; // Active events in this region
   gdp: number; // Gross Domestic Product, representing economic output
+  economicSectors: Record<EconomicSectorType, EconomicSector>; // Detailed economic sectors
+  demographics: RegionDemographics; // Population demographics
   // Records for tracking the supply and demand of strategic resources within the region.
   // These are influenced by population, facilities, and global economic conditions.
   resourceDemand: Record<StrategicResourceType, number>; // Units demanded per tick
   resourceProduction: Record<StrategicResourceType, number>; // Units produced per tick
+}
+
+export interface RegionDemographics {
+  workingAgePopulation: number;
+  unemployedPopulation: number;
+  educationLevel: number; // Average education level (e.g., 0-100 or an enum)
+  // Potentially add: age brackets, skilled vs unskilled labor, etc.
+}
+
+export enum EconomicSectorType {
+  AGRICULTURE = 'agriculture',
+  INDUSTRY = 'industry',
+  SERVICES = 'services',
+  ENERGY = 'energy',
+  // RESEARCH_DEVELOPMENT = 'research_development', // Could be a sector or part of services/industry
+}
+
+export interface EconomicSector {
+  type: EconomicSectorType;
+  output: number; // Monetary value produced by this sector per tick
+  employment: number; // Number of people employed
+  efficiency: number; // Factor (0-1) affecting output and resource consumption
+  // Specific resource needs for this sector to function optimally
+  resourceNeeds?: Partial<Record<StrategicResourceType | string, number>>; // Keyed by resource, value is consumption rate per unit of output or per tick
 }
 
 export interface RegionEvent {
@@ -198,12 +224,36 @@ export class GameEngine {
       { id: 'oc', name: 'Oceania', population: 50000000, health: 85, environment: 75, stability: 85, x: 0.8, y: -0.5, color: [0.2, 0.9, 0.7] as [number,number,number], gdp: 3000000 }
     ];
 
-    const regions: WorldRegion[] = regionsData.map(r => ({
+    const regions: WorldRegion[] = regionsData.map(r => {
+      // Initial economic sector setup
+      const initialSectors: Record<EconomicSectorType, EconomicSector> = {
+        [EconomicSectorType.AGRICULTURE]: { type: EconomicSectorType.AGRICULTURE, output: r.gdp * 0.1, employment: r.population * 0.05, efficiency: 0.7, resourceNeeds: { [StrategicResourceType.WATER]: 0.02, 'energy': 0.01 } },
+        [EconomicSectorType.INDUSTRY]: { type: EconomicSectorType.INDUSTRY, output: r.gdp * 0.3, employment: r.population * 0.1, efficiency: 0.6, resourceNeeds: { [StrategicResourceType.RARE_METALS]: 0.01, [StrategicResourceType.WATER]: 0.01, 'energy': 0.05 } },
+        [EconomicSectorType.SERVICES]: { type: EconomicSectorType.SERVICES, output: r.gdp * 0.4, employment: r.population * 0.15, efficiency: 0.8, resourceNeeds: { [StrategicResourceType.DATA_CONDUITS]: 0.005, 'energy': 0.02 } },
+        [EconomicSectorType.ENERGY]: { type: EconomicSectorType.ENERGY, output: r.gdp * 0.2, employment: r.population * 0.02, efficiency: 0.75, resourceNeeds: { [StrategicResourceType.EXOTIC_ISOTOPES]: 0.001, [StrategicResourceType.WATER]: 0.005 } },
+      };
+      // Ensure initial GDP is sum of sector outputs
+      const calculatedGdp = Object.values(initialSectors).reduce((sum, sector) => sum + sector.output, 0);
+      const initialTotalEmployment = Object.values(initialSectors).reduce((sum, sector) => sum + sector.employment, 0);
+
+      // Initial demographics setup
+      const initialDemographics: RegionDemographics = {
+        workingAgePopulation: r.population * 0.65, // Assume 65% are of working age
+        unemployedPopulation: Math.max(0, (r.population * 0.65) - initialTotalEmployment), // Working age minus employed
+        educationLevel: 50 + (r.gdp / r.population / 1000), // Simple heuristic for education based on per capita GDP
+      };
+      initialDemographics.educationLevel = Math.max(10, Math.min(95, initialDemographics.educationLevel)); // Clamp education
+
+      return {
         ...r,
+        gdp: calculatedGdp, // Override gdp with sum of sectors
         events: [],
-        resourceDemand: createInitialResourceValues(r.population, r.gdp, true),
-        resourceProduction: createInitialResourceValues(r.population, r.gdp, false),
-    }));
+        economicSectors: initialSectors,
+        demographics: initialDemographics,
+        resourceDemand: createInitialResourceValues(r.population, calculatedGdp, true),
+        resourceProduction: createInitialResourceValues(r.population, calculatedGdp, false),
+      };
+    });
 
     const numberOfHexagons = 256;
     const allHexagonIds = GameEngine.generateHexagonIds(numberOfHexagons);
@@ -495,32 +545,52 @@ export class GameEngine {
     }
 
     // Apply regional economic impacts (once per facility update, affects the region it's in)
-    // This part affects the region's economy, not the player's direct resources.
-    // It's called here, but the modification is on the region object within the main updateWorld loop's context.
-    // To ensure this is clean, updateFacility should not directly modify 'state.regions'.
-    // Instead, these impacts could be aggregated and applied to regions in updateRegion or a dedicated economic update phase.
-    // For now, let's assume direct modification is acceptable within the GameEngine's private methods if state is properly copied.
     const region = state.regions.find(r => r.id === newFacility.regionId);
     if (region && definition.economicImpact) {
         const impact = definition.economicImpact;
-        if (impact.gdpBoostPerTick) {
-            region.gdp += impact.gdpBoostPerTick * tickDeltaTime;
-        }
-        if (impact.gdpMultiplier) { // Assuming this is a one-time or slowly accumulating multiplier effect
-             // This logic might need to be one-time on construction, or a very slow tick.
-             // For per-tick: region.gdp *= (1 + (impact.gdpMultiplier - 1) * tickDeltaTime);
-        }
-        region.gdp = Math.max(1, region.gdp);
+        const tickScaledImpact = (value: number | undefined) => (value || 0) * tickDeltaTime;
 
+        // Overall GDP Boost (can be deprecated if sector boosts are comprehensive)
+        if (impact.gdpBoostPerTick) {
+            region.gdp += tickScaledImpact(impact.gdpBoostPerTick);
+        }
+        // Note: gdpMultiplier might be better applied once on construction or very slowly.
+        // For per-tick: region.gdp *= (1 + (impact.gdpMultiplier - 1) * tickDeltaTime);
+
+        // Sector-specific impacts
+        if (impact.primarySector && region.economicSectors[impact.primarySector]) {
+            // Example: A facility might directly increase its primary sector's output or efficiency
+            // This is a placeholder for more detailed logic; actual impact values come from definition.
+        }
+        if (impact.sectorOutputBoost) {
+            for (const sectorKey in impact.sectorOutputBoost) {
+                const sectorType = sectorKey as EconomicSectorType;
+                const boostAmount = impact.sectorOutputBoost[sectorType];
+                if (region.economicSectors[sectorType] && boostAmount) {
+                    region.economicSectors[sectorType].output += tickScaledImpact(boostAmount);
+                }
+            }
+        }
+        if (impact.sectorEfficiencyBoost) {
+            for (const sectorKey in impact.sectorEfficiencyBoost) {
+                const sectorType = sectorKey as EconomicSectorType;
+                const efficiencyBoost = impact.sectorEfficiencyBoost[sectorType];
+                if (region.economicSectors[sectorType] && efficiencyBoost) {
+                    // Efficiency boost could be additive factor or multiplier. Assuming additive for now.
+                    // Ensure efficiency is capped, e.g., between 0 and 1 (or higher if it's a different scale)
+                    const currentEfficiency = region.economicSectors[sectorType].efficiency;
+                    region.economicSectors[sectorType].efficiency = Math.min(1, currentEfficiency + tickScaledImpact(efficiencyBoost)); // Cap at 1
+                }
+            }
+        }
+
+        // Regional strategic resource production/demand modifiers (existing logic)
         if (impact.regionalProductionModifier) {
             for (const resTypeStr in impact.regionalProductionModifier) {
                 const resType = resTypeStr as StrategicResourceType;
                 const modifier = impact.regionalProductionModifier[resType];
                 if (modifier && region.resourceProduction[resType] !== undefined) {
-                    // This should modify the BASE production, or be an additive boost.
-                    // If it's a multiplier, it should apply to a base rate not the fluctuating current value.
-                    // Simplified: apply additive boost based on modifier.
-                    region.resourceProduction[resType] += (modifier -1) * 0.1 * tickDeltaTime; // Small additive boost
+                    region.resourceProduction[resType] += (modifier - 1) * 0.1 * tickDeltaTime; // Small additive boost
                     region.resourceProduction[resType] = Math.max(0, region.resourceProduction[resType]);
                 }
             }
@@ -530,11 +600,14 @@ export class GameEngine {
                 const resType = resTypeStr as StrategicResourceType;
                 const modifier = impact.regionalDemandModifier[resType];
                 if (modifier && region.resourceDemand[resType] !== undefined) {
-                    region.resourceDemand[resType] += (modifier-1) * 0.1 * tickDeltaTime; // Small additive change
+                    region.resourceDemand[resType] += (modifier - 1) * 0.1 * tickDeltaTime; // Small additive change
                     region.resourceDemand[resType] = Math.max(0.1, region.resourceDemand[resType]);
                 }
             }
         }
+        // Recalculate overall GDP based on sector outputs after modifications
+        region.gdp = Object.values(region.economicSectors).reduce((sum, sector) => sum + sector.output, 0);
+        region.gdp = Math.max(1, region.gdp); // Ensure GDP doesn't drop below a minimum.
     }
     return newFacility;
   }
@@ -778,50 +851,127 @@ private applyConflict(eventA: RegionEvent, eventB: RegionEvent, conflictDef: Non
 }
   
   private updateRegion(region: WorldRegion, deltaTime: number, state: GameState): WorldRegion {
-    const newRegion = { ...region }; // Operate on a copy
-    const tickDelta = deltaTime; // deltaTime already incorporates game speed from updateWorld via updateWorld function
+    const newRegion = { ...region, economicSectors: { ...region.economicSectors }, demographics: { ...region.demographics} }; // Deep copy sectors and demographics
+    const tickDelta = deltaTime;
 
-    // Baseline environmental and stability fluctuations (e.g., noise, gradual decay/recovery)
-    const baseNoise = this.noise2D(region.x * 5 + state.time * 0.00001, state.time * 0.00005); // Slower time evolution for noise
+    // Baseline environmental and stability fluctuations
+    const baseNoise = this.noise2D(region.x * 5 + state.time * 0.00001, state.time * 0.00005);
     newRegion.environment = Math.max(0, Math.min(100, newRegion.environment + baseNoise * 0.1 * tickDelta));
-    newRegion.stability = Math.max(0, Math.min(100, newRegion.stability + baseNoise * 0.2 * tickDelta)); // Stability slightly more volatile to noise
+    newRegion.stability = Math.max(0, Math.min(100, newRegion.stability + baseNoise * 0.2 * tickDelta));
 
-    // --- Economic Simulation Update ---
+    // --- Update Demographics ---
+    // Base working age population changes with total population
+    newRegion.demographics.workingAgePopulation = newRegion.population * 0.65 * (newRegion.health / 100); // Healthier population, more working age
+    newRegion.demographics.workingAgePopulation = Math.max(0, newRegion.demographics.workingAgePopulation);
+
+    // Education level can slowly change based on stability, GDP per capita, and policies (later)
+    let educationChange = (newRegion.stability / 100 - 0.5) * 0.01; // Stability effect
+    educationChange += ( (newRegion.gdp / Math.max(1,newRegion.population)) / 50000 - 0.5) * 0.005; // GDP per capita effect (normalized around 50k)
+    newRegion.demographics.educationLevel += educationChange * tickDelta;
+    newRegion.demographics.educationLevel = Math.max(5, Math.min(100, newRegion.demographics.educationLevel));
+
+
+    // --- Enhanced Economic Simulation Update ---
+    let totalRegionalGdp = 0;
+    let totalEmployment = 0;
     const popMillions = newRegion.population / 1000000;
-    const gdpBillions = newRegion.gdp / 1000; // Assuming initial GDP is in millions
 
-    // 1. Update Regional GDP based on various factors
-    let gdpGrowthFactor = 0.0005; // Base micro-growth per tick
-    gdpGrowthFactor += (newRegion.stability / 100 - 0.5) * 0.001; // Stability contribution
-    gdpGrowthFactor += (newRegion.health / 100 - 0.5) * 0.0005; // Health contribution
-    gdpGrowthFactor += (newRegion.environment / 100 - 0.5) * 0.0003; // Environment contribution
-    // Resource availability can also impact GDP (simplified)
-    let resourceShortageImpact = 0;
-    Object.values(StrategicResourceType).forEach(resType => {
-        if (newRegion.resourceProduction[resType] < newRegion.resourceDemand[resType]) {
-            resourceShortageImpact -= 0.0001; // Each shortage type slightly dampens GDP growth
+    // 1. Update each Economic Sector
+    for (const sectorTypeStr in newRegion.economicSectors) {
+        const sectorType = sectorTypeStr as EconomicSectorType;
+        const sector = { ...newRegion.economicSectors[sectorType] }; // Operate on a copy of the sector
+
+        // Workforce impact on efficiency: Higher education & lower unemployment = better efficiency
+        let workforceFactor = (newRegion.demographics.educationLevel / 75); // Base on education (normalized around 75)
+        workforceFactor *= (1 - (newRegion.demographics.unemployedPopulation / Math.max(1, newRegion.demographics.workingAgePopulation)) * 0.5 ); // Unemployment drag
+        workforceFactor = Math.max(0.5, Math.min(1.5, workforceFactor)); // Clamp factor
+
+        sector.efficiency *= (1 + (workforceFactor -1) * 0.001 * tickDelta); // Small tick influence of workforce quality
+        sector.efficiency = Math.max(0.1, Math.min(1, sector.efficiency));
+
+
+        // Base growth/decay factors for sector output
+        let sectorGrowthFactor = 0.0001; // Tiny base growth/adjustment tendency
+        sectorGrowthFactor += (newRegion.stability / 100 - 0.5) * 0.0005; // Stability influence
+        sectorGrowthFactor += (sector.efficiency - 0.5) * 0.001; // Efficiency influence (now includes workforce)
+
+
+        // Resource availability impact on this sector's output/efficiency
+        let sectorResourceShortageImpact = 0;
+        if (sector.resourceNeeds) {
+            for (const resKey in sector.resourceNeeds) {
+                const requiredAmount = sector.resourceNeeds[resKey as keyof typeof sector.resourceNeeds]! * sector.output; // Simplified: needs scale with current output
+                const availableAmount = newRegion.resourceProduction[resKey as StrategicResourceType] || 0; // Assuming string keys match StrategicResourceType or general resources
+                const demandMetFactor = Math.min(1, (availableAmount + 0.01) / (requiredAmount + 0.01) ); // Avoid division by zero
+
+                if (demandMetFactor < 0.8) { // Significant shortage
+                    sectorResourceShortageImpact -= (1 - demandMetFactor) * 0.002; // Penalty for shortage
+                    sector.efficiency *= (1 - (1 - demandMetFactor) * 0.001 * tickDelta); // Efficiency drop due to shortage
+                }
+            }
         }
-    });
-    gdpGrowthFactor += resourceShortageImpact;
-    newRegion.gdp *= (1 + gdpGrowthFactor * tickDelta);
-    newRegion.gdp = Math.max(100, newRegion.gdp); // Minimum GDP
+        sectorGrowthFactor += sectorResourceShortageImpact;
+        sector.output *= (1 + sectorGrowthFactor * tickDelta);
+        sector.output = Math.max(1, sector.output); // Minimum sector output
+        sector.efficiency = Math.max(0.1, Math.min(1, sector.efficiency)); // Clamp efficiency
 
+        // Employment in sector can adjust based on output and efficiency (simplified)
+        const desiredEmployment = sector.output / (20000 * Math.max(0.1, sector.efficiency)); // Arbitrary: 1 person per 20k output at normal efficiency
+        const employmentChange = (desiredEmployment - sector.employment) * 0.01 * tickDelta; // Slow adjustment
+        sector.employment += employmentChange;
+        sector.employment = Math.max(0, Math.min(sector.employment, newRegion.demographics.workingAgePopulation * 0.8)); // Cap by available workforce portion
 
-    // 2. Update Regional Demand for Strategic Resources
-    // Demand is driven by population, GDP (complexity of economy), and active facilities.
-    // Facility impacts on demand/production are now directly applied in updateFacility to the region's values.
-    for (const resType of Object.values(StrategicResourceType)) {
-        let baseDemand = (popMillions / 10) * (1 + gdpBillions / 1000) * 0.005; // Base demand per tick based on pop & gdp
+        newRegion.economicSectors[sectorType] = sector; // Update the sector in newRegion
+        totalRegionalGdp += sector.output;
+        totalEmployment += sector.employment;
+    }
+    newRegion.gdp = totalRegionalGdp; // Update total GDP from sum of sector outputs
+    newRegion.demographics.unemployedPopulation = Math.max(0, newRegion.demographics.workingAgePopulation - totalEmployment);
 
-        // Simulate consumption/decay of demand if not met, or slight natural growth
-        newRegion.resourceDemand[resType] = Math.max(0.1, (newRegion.resourceDemand[resType] || 0) * (1 - 0.001 * tickDelta) + baseDemand * tickDelta);
-
-        // Production is also influenced by facilities (in updateFacility) and potentially by regional stats like environment/stability
-        let baseProductionFactor = (newRegion.environment / 100) * (newRegion.stability / 100); // Healthier, stabler regions are better at production
-        newRegion.resourceProduction[resType] = Math.max(0, (newRegion.resourceProduction[resType] || 0) * (1 - 0.0005 * tickDelta) + (baseProductionFactor * 0.002 * gdpBillions * tickDelta) );
+    // Stability impact from unemployment
+    const unemploymentRate = newRegion.demographics.unemployedPopulation / Math.max(1, newRegion.demographics.workingAgePopulation);
+    if (unemploymentRate > 0.1) { // If unemployment is over 10%
+        newRegion.stability -= (unemploymentRate - 0.1) * 0.1 * tickDelta * 60; // Scaled stability hit
+        newRegion.stability = Math.max(0, newRegion.stability);
     }
 
-    // 3. Health and Stability affected by Resource Balance
+
+    // 2. Update Regional Strategic Resource Demand based on new sector outputs and their needs
+    // Reset demand before recalculating
+    for (const resType of Object.values(StrategicResourceType)) {
+      newRegion.resourceDemand[resType] = 0.1; // Base minimal demand
+    }
+    // General population based demand (includes FOOD and WATER directly for population)
+    newRegion.resourceDemand[StrategicResourceType.FOOD] = (newRegion.resourceDemand[StrategicResourceType.FOOD] || 0) + popMillions * 0.01 * tickDelta; // Each million people demand 0.01 food per tick
+    newRegion.resourceDemand[StrategicResourceType.WATER] = (newRegion.resourceDemand[StrategicResourceType.WATER] || 0) + popMillions * 0.015 * tickDelta; // Each million people demand 0.015 water per tick
+
+    // General demand for other strategic resources based on population and GDP
+    Object.values(StrategicResourceType).forEach(resType => {
+        if (resType !== StrategicResourceType.FOOD && resType !== StrategicResourceType.WATER) { // Already handled
+            newRegion.resourceDemand[resType] = (newRegion.resourceDemand[resType] || 0) + (popMillions / 20) * (newRegion.gdp / 10000000) * 0.0005 * tickDelta; // Reduced factor as some is covered by sector needs
+        }
+    });
+
+    // Sector-specific demand
+    for (const sectorTypeStr in newRegion.economicSectors) {
+        const sector = newRegion.economicSectors[sectorTypeStr as EconomicSectorType];
+        if (sector.resourceNeeds) {
+            for (const resKey in sector.resourceNeeds) {
+                const demandAmount = sector.resourceNeeds[resKey as keyof typeof sector.resourceNeeds]! * sector.output * 0.01 * tickDelta; // Scaled by output & tick
+                newRegion.resourceDemand[resKey as StrategicResourceType] = (newRegion.resourceDemand[resKey as StrategicResourceType] || 0) + demandAmount;
+            }
+        }
+    }
+    // TODO: Update Regional Strategic Resource Production (can be more dynamic based on available workforce, tech, etc.)
+    // For now, production side is mostly affected by facilities directly in updateFacility and base values.
+    // Could add a small natural regeneration or depletion factor here.
+    Object.values(StrategicResourceType).forEach(resType => {
+        let baseProductionFactor = (newRegion.environment / 100) * (newRegion.stability / 100) * (newRegion.health / 100);
+        newRegion.resourceProduction[resType] = Math.max(0, (newRegion.resourceProduction[resType] || 0) * (1 - 0.0001 * tickDelta) + (baseProductionFactor * (newRegion.gdp / 10000000) * 0.0005 * tickDelta));
+    });
+
+
+    // 3. Health and Stability affected by Resource Balance (similar to before, but uses new demand figures)
     let overallResourceBalanceScore = 0;
     const numStrategicResources = Object.keys(StrategicResourceType).length;
     for (const resType of Object.values(StrategicResourceType)) {
@@ -833,10 +983,24 @@ private applyConflict(eventA: RegionEvent, eventB: RegionEvent, conflictDef: Non
         }
     }
     // Normalize score (very roughly)
-    const normalizedBalanceImpact = overallResourceBalanceScore / numStrategicResources;
+    const normalizedBalanceImpact = overallResourceBalanceScore / numStrategicResources; // General resource balance
 
-    newRegion.stability += normalizedBalanceImpact * 0.05 * tickDelta * 60; // Scaled impact per "minute"
-    newRegion.health += normalizedBalanceImpact * 0.02 * tickDelta * 60; // Resource shortages also affect health
+    // Specific impact from FOOD and WATER shortages on HEALTH
+    const foodBalance = (newRegion.resourceProduction[StrategicResourceType.FOOD] || 0) - (newRegion.resourceDemand[StrategicResourceType.FOOD] || 0);
+    const waterBalance = (newRegion.resourceProduction[StrategicResourceType.WATER] || 0) - (newRegion.resourceDemand[StrategicResourceType.WATER] || 0);
+
+    let foodShortageHealthImpact = 0;
+    if (foodBalance < 0) {
+        foodShortageHealthImpact = (foodBalance / Math.max(1, newRegion.resourceDemand[StrategicResourceType.FOOD])) * 0.1 * tickDelta * 60; // More severe health impact for food
+    }
+    let waterShortageHealthImpact = 0;
+    if (waterBalance < 0) {
+        waterShortageHealthImpact = (waterBalance / Math.max(1, newRegion.resourceDemand[StrategicResourceType.WATER])) * 0.08 * tickDelta * 60; // Significant health impact for water
+    }
+
+    newRegion.stability += normalizedBalanceImpact * 0.05 * tickDelta * 60; // General resource balance affects stability
+    newRegion.health += normalizedBalanceImpact * 0.01 * tickDelta * 60; // General resource balance has smaller direct health impact
+    newRegion.health += foodShortageHealthImpact + waterShortageHealthImpact; // Add specific food/water shortage impacts
 
     newRegion.stability = Math.max(0, Math.min(100, newRegion.stability));
     newRegion.health = Math.max(0, Math.min(100, newRegion.health));
@@ -1554,6 +1718,19 @@ public buildFacility(state: GameState, facilityType: FacilityType, regionId: str
           region.environment = Math.max(0, Math.min(100, region.environment));
           region.stability = Math.max(0, Math.min(100, region.stability));
         }
+        // Apply demographic effects per tick (if any)
+        if (program.definition.demographicEffects && program.definition.demographicEffects.educationLevelChange) {
+            region.demographics.educationLevel += program.definition.demographicEffects.educationLevelChange * deltaTime * newState.speed;
+            region.demographics.educationLevel = Math.max(5, Math.min(100, region.demographics.educationLevel));
+        }
+        if (program.definition.demographicEffects && program.definition.demographicEffects.unemploymentChange) {
+            // This is a direct change to number of unemployed people. Positive value increases unemployment.
+            const changeInUnemployed = program.definition.demographicEffects.unemploymentChange * deltaTime * newState.speed;
+            region.demographics.unemployedPopulation += changeInUnemployed;
+            // Ensure unemployment doesn't go below zero or exceed working age population
+            region.demographics.unemployedPopulation = Math.max(0, Math.min(region.demographics.unemployedPopulation, region.demographics.workingAgePopulation));
+        }
+
 
         newState.regions[regionIndex] = region; // Update region in newState
 
@@ -1594,17 +1771,63 @@ public buildFacility(state: GameState, facilityType: FacilityType, regionId: str
           }
         }
 
-        // Global player modifiers (e.g., resource income, research speed)
-        // These would be checked by relevant systems (e.g., research update, resource calculation)
-        // For example, researchSpeedModifier would be used in updateResearchProgress.
-        // resourceIncomeModifier would need a central place where player income is calculated.
+        // Global player modifiers
+        if (definition.globalPlayerModifiers) {
+          const { researchSpeedModifier, resourceIncomeModifier, facilityUpkeepModifier } = definition.globalPlayerModifiers;
+          if (researchSpeedModifier) {
+            // Actual application is in updateResearchProgress, which checks playerState.globalResources.research.
+            // This policy effect should modify that base research generation rate if active.
+            // For now, this is implicitly handled if 'research' is a resource in globalResources and the policy modifies it.
+            // A more direct way: playerState.researchBonusFactor = (playerState.researchBonusFactor || 1) * researchSpeedModifier;
+          }
+          if (resourceIncomeModifier) {
+            for (const res in resourceIncomeModifier) {
+              const incomeKey = res as keyof typeof resourceIncomeModifier;
+              // This should apply to the *rate* of income, not directly to the stockpile each tick.
+              // For now, if it's 'credits', let's assume a small flat bonus symbolic of better trade/tax efficiency.
+              if (res === 'credits' && resourceIncomeModifier[incomeKey]! > 1) {
+                 newState.players[playerId].globalResources[res] = (newState.players[playerId].globalResources[res] || 0) + (resourceIncomeModifier[incomeKey]! - 1) * 5 * deltaTime * newState.speed; // Smaller flat bonus
+              }
+            }
+          }
+          // facilityUpkeepModifier would ideally reduce maintenance costs calculated elsewhere (e.g. in updateFacility)
+        }
 
-        // Regional modifiers (for all regions controlled by player)
-        // This is complex if regions aren't explicitly player-controlled.
-        // For now, let's assume policies apply their regional modifiers abstractly,
-        // and specific game mechanics (like updateRegion) would need to check player's active policies
-        // if the region is considered under their influence.
-        // Example: if (playerControlsRegion(playerId, region.id)) { apply regional policy effects }
+        // Regional modifiers (applied to all regions, assuming player policies affect their entire sphere of influence)
+        if (definition.regionalModifiers) {
+          const { stabilityBonusPerTick, environmentChangePerTick, facilityConstructionSpeedModifier, pollutionFromIndustryModifier } = definition.regionalModifiers;
+          newState.regions.forEach(region => { // TODO: In future, only apply to regions player 'controls' or has high influence in.
+            if (stabilityBonusPerTick) {
+              region.stability += stabilityBonusPerTick * deltaTime * newState.speed;
+              region.stability = Math.max(0, Math.min(100, region.stability));
+            }
+            if (environmentChangePerTick) {
+              region.environment += environmentChangePerTick * deltaTime * newState.speed;
+              region.environment = Math.max(0, Math.min(100, region.environment));
+            }
+            // facilityConstructionSpeedModifier would be checked by facilities under construction.
+            // pollutionFromIndustryModifier would affect calculations within sectors or facilities.
+          });
+        }
+
+        // Specific policy direct effects (like Education Subsidies impacting regional education levels)
+        if (policyType === PolicyType.EDUCATION_SUBSIDIES) {
+            newState.regions.forEach(region => { // Apply to all player regions
+                region.demographics.educationLevel += 0.02 * deltaTime * newState.speed; // Slow tick effect
+                region.demographics.educationLevel = Math.max(5, Math.min(100, region.demographics.educationLevel));
+            });
+        }
+         if (policyType === PolicyType.ENVIRONMENTAL_REGULATION) {
+            newState.regions.forEach(region => {
+                const industrySector = region.economicSectors[EconomicSectorType.INDUSTRY];
+                if (industrySector) {
+                    // Increased efficiency hit for Environmental Regulation to make it more impactful.
+                    industrySector.efficiency -= 0.005 * deltaTime * newState.speed; // Adjusted impact
+                    industrySector.efficiency = Math.max(0.1, industrySector.efficiency);
+                }
+            });
+        }
+
       });
     }
     return newState;

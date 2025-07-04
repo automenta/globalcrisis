@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three'; // For Vector3 type if needed for hexCenter
 import { GameEngine, GameState, EventType, WorldRegion, RegionEvent, PlanetaryFacility } from './engine/GameEngine';
