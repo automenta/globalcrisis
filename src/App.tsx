@@ -6,6 +6,7 @@ import { StrategicResourceType } from './engine/definitions';
 import { Earth3D, Satellite, ContextMenu as ContextMenuType } from './components/Earth3D';
 import { ContextMenu, TacticalOverlay } from './components/WarRoomUI';
 import { HexagonInfoPanel } from './components/HexagonInfoPanel';
+import { RegionInfoPanel } from './components/RegionInfoPanel'; // Added RegionInfoPanel
 import { TechnologyPanel } from './components/TechnologyPanel';
 import { FacilityManagementPanel } from './components/FacilityManagementPanel'; // Import FacilityManagementPanel
 import { TechId } from './engine/Technology';
@@ -49,6 +50,8 @@ export default function GlobalCrisisSimulator() {
   const [selectingHexForScan, setSelectingHexForScan] = useState<Satellite | null>(null);
   const [selectingHexForBuilding, setSelectingHexForBuilding] = useState<FacilityType | null>(null);
   const [appTargetedHexIdForBuild, setAppTargetedHexIdForBuild] = useState<string | null>(null);
+  const [selectedRegionForPanel, setSelectedRegionForPanel] = useState<WorldRegion | null>(null);
+
 
   const { gameEngineRef, earth3DRef, audioRef, isInitialized } = useGameInitialization({
     canvasContainerRef,
@@ -56,49 +59,83 @@ export default function GlobalCrisisSimulator() {
     setContextMenu,
     setSelectedHexagonDetails,
     setHexagonPanelPosition,
-    // Pass down setters for the hook to potentially use or for context,
-    // though primary logic for these states might remain in App.tsx's handlers.
-    setSelectingHexForScan: setSelectingHexForScan,
-    setAppTargetedHexIdForBuild: setAppTargetedHexIdForBuild,
-    setSelectingHexForBuilding: setSelectingHexForBuilding,
-    setShowFacilityPanel: setShowFacilityPanel,
+    setSelectedRegionForPanel, // Pass setter for region panel
+    setSelectingHexForScan,
+    setAppTargetedHexIdForBuild,
+    setSelectingHexForBuilding,
+    setShowFacilityPanel,
   });
 
   // Effect to set up complex Earth3D click handlers that depend on App.tsx state,
   // once the game systems are initialized by the hook.
   useEffect(() => {
-    if (isInitialized && earth3DRef.current && gameEngineRef.current && audioRef.current) {
+    if (isInitialized && earth3DRef.current && gameEngineRef.current && audioRef.current && gameState) {
       const earth3D = earth3DRef.current;
       const gameEngine = gameEngineRef.current;
-      const audio = audioRef.current; // Capture current ref value for use in callbacks
+      const audio = audioRef.current;
 
-      // Basic click handlers (onRegionClick, onSatelliteClick) are set by useGameInitialization
-      // to call setContextMenu. Here we set up the more complex onHexagonClick.
+      // Overriding onRegionClick from useGameInitialization to also show RegionInfoPanel
+      earth3D.onRegionClick = (region, clickX, clickY) => {
+        const fullRegionData = gameState.regions.find(r => r.id === region.id);
+        if (fullRegionData) {
+            setSelectedRegionForPanel(fullRegionData);
+        } else {
+            setSelectedRegionForPanel(region); // Fallback to potentially partial data from click
+        }
+        // Optionally, still open context menu or have a different interaction
+        setContextMenu({
+          visible: true, x: clickX, y: clickY, region, type: 'region', target: region,
+          satellite: null, event: null // Clear other context types
+        });
+        setSelectedHexagonDetails(null); // Close hex panel if open
+      };
+
+      earth3D.onSatelliteClick = (satellite, clickX, clickY) => {
+        setContextMenu({
+            visible: true, x: clickX, y: clickY, satellite, type: 'satellite', target: satellite,
+            region: null, event: null // Clear other context types
+        });
+        setSelectedHexagonDetails(null);
+        setSelectedRegionForPanel(null);
+      };
+
+      // earth3D.onEventClick = (event, clickX, clickY) => { ... }; // If needed
 
       earth3D.onHexagonClick = (hexagonId, _hexagonCenter, clickX, clickY) => {
-        setGameState(currentGS => {
-          if (!currentGS || !gameEngineRef.current) { // Ensure gameEngineRef is valid inside callback
+        setGameState(currentGS => { // Use functional update for gameState
+          if (!currentGS || !gameEngineRef.current) {
             return currentGS;
           }
+          const currentGameEngine = gameEngineRef.current; // Use captured ref for safety
 
           const strategicResource = currentGS.hexagonStrategicResources[hexagonId];
+          // Ensure activeFacilities is correctly accessed from currentGS.players.humanPlayer (or active player)
+          // For simplicity, assuming facilities are global for now or player is known.
+          // This needs alignment with how facilities are stored if player-specific.
+          // Assuming currentGS.activeFacilities is a flat list of all facilities for now.
           const facilitiesOnHex = currentGS.activeFacilities.filter(f => f.hexagonId === hexagonId);
 
+          // Find events affecting this hex (more complex, needs helper or direct region data)
+          // For now, an empty array. This would require linking hexes to regions or event radii.
+          const eventsOnHex: RegionEvent[] = [];
+
+
           setSelectedHexagonDetails({
-            id: hexagonId, strategicResource, facilities: facilitiesOnHex, events: [],
+            id: hexagonId, strategicResource, facilities: facilitiesOnHex, events: eventsOnHex,
           });
           setHexagonPanelPosition({
             x: Math.min(clickX + 15, window.innerWidth - 300),
             y: Math.min(clickY + 15, window.innerHeight - 250),
           });
           setContextMenu(prev => ({ ...prev, visible: false }));
+          setSelectedRegionForPanel(null); // Close region panel if open
 
           let nextGameState = currentGS;
 
           if (selectingHexForScan) {
             const satelliteForScan = selectingHexForScan;
             setSelectingHexForScan(null);
-            const res = gameEngine.performGeoScan(currentGS, satelliteForScan.id, hexagonId);
+            const res = currentGameEngine.performGeoScan(currentGS, satelliteForScan.id, hexagonId, 'player_human'); // Assume player_human
             if (res.success && res.newState) {
               nextGameState = res.newState;
               audio.playAlert('success');
@@ -107,23 +144,24 @@ export default function GlobalCrisisSimulator() {
               audio.playAlert('warning');
               alert(`GeoScan failed: ${res.message}`);
             }
-            return nextGameState;
+            return nextGameState; // Important: return the updated state
           }
 
           if (selectingHexForBuilding) {
             const facilityTypeToBuild = selectingHexForBuilding;
             console.log(`Hexagon ${hexagonId} selected for building ${facilityTypeToBuild}.`);
             setAppTargetedHexIdForBuild(hexagonId);
-            setSelectingHexForBuilding(null);
-            setShowFacilityPanel(true);
+            setSelectingHexForBuilding(null); // Clear the mode
+            setShowFacilityPanel(true); // Open facility panel to confirm build
+            // Do not modify gameState here, facility panel will handle build action
           }
-          return nextGameState;
+          return nextGameState; // Return currentGS if no state change occurred from scan
         });
       };
     }
   }, [
-    isInitialized, earth3DRef, gameEngineRef, audioRef,
-    setGameState,
+    isInitialized, earth3DRef, gameEngineRef, audioRef, gameState, // Added gameState as dep
+    setGameState, setSelectedRegionForPanel,
     setSelectedHexagonDetails, setHexagonPanelPosition, setContextMenu,
     selectingHexForScan, setSelectingHexForScan,
     selectingHexForBuilding, setSelectingHexForBuilding,
@@ -560,7 +598,16 @@ export default function GlobalCrisisSimulator() {
           hexagon={selectedHexagonDetails}
           onClose={() => setSelectedHexagonDetails(null)}
           position={hexagonPanelPosition}
-          onBuildFacility={(facilityType, regionId, hexagonId) => { /* TODO: Implement or pass handler */ console.log("Build request from hex panel:", facilityType, regionId, hexagonId);}}
+          // onBuildFacility={(facilityType, regionId, hexagonId) => { console.log("Build request from hex panel:", facilityType, regionId, hexagonId);}}
+        />
+      )}
+
+      {/* Region Info Panel */}
+      {selectedRegionForPanel && gameState && (
+        <RegionInfoPanel
+          region={selectedRegionForPanel}
+          gameState={gameState}
+          onClose={() => setSelectedRegionForPanel(null)}
         />
       )}
 

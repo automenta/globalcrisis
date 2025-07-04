@@ -1,7 +1,7 @@
 import { createNoise2D } from 'simplex-noise';
 import {
     THREAT_DEFINITIONS, ThreatDefinition,
-    FACILITY_DEFINITIONS, PlanetaryFacilityDefinition, FacilityType, StrategicResourceType
+    FACILITY_DEFINITIONS, PlanetaryFacilityDefinition, FacilityType, StrategicResourceType, BiomeType
 } from './definitions';
 import { TECH_TREE } from './Technology'; // Import TECH_TREE
 
@@ -23,13 +23,16 @@ export interface WorldRegion {
   // These are influenced by population, facilities, and global economic conditions.
   resourceDemand: Record<StrategicResourceType, number>; // Units demanded per tick
   resourceProduction: Record<StrategicResourceType, number>; // Units produced per tick
+  dominantBiome: BiomeType; // Dominant biome type for the region
 }
 
 export interface RegionDemographics {
   workingAgePopulation: number;
   unemployedPopulation: number;
   educationLevel: number; // Average education level (e.g., 0-100 or an enum)
-  // Potentially add: age brackets, skilled vs unskilled labor, etc.
+  birthRate: number; // Births per 1000 population per time unit (e.g., year/game tick)
+  deathRate: number; // Deaths per 1000 population per time unit
+  // Potentially add: age brackets (children, elderly), skilled vs unskilled labor, migration rates etc.
 }
 
 export enum EconomicSectorType {
@@ -46,7 +49,8 @@ export interface EconomicSector {
   employment: number; // Number of people employed
   efficiency: number; // Factor (0-1) affecting output and resource consumption
   // Specific resource needs for this sector to function optimally
-  resourceNeeds?: Partial<Record<StrategicResourceType | string, number>>; // Keyed by resource, value is consumption rate per unit of output or per tick
+  // Value: units of resource needed per 1000 units of monetary output, or per tick if output not directly tied
+  inputResourceNeeds?: Partial<Record<StrategicResourceType | string, number>>;
 }
 
 export interface RegionEvent {
@@ -225,24 +229,39 @@ export class GameEngine {
     ];
 
     const regions: WorldRegion[] = regionsData.map(r => {
-      // Initial economic sector setup
       const initialSectors: Record<EconomicSectorType, EconomicSector> = {
-        [EconomicSectorType.AGRICULTURE]: { type: EconomicSectorType.AGRICULTURE, output: r.gdp * 0.1, employment: r.population * 0.05, efficiency: 0.7, resourceNeeds: { [StrategicResourceType.WATER]: 0.02, 'energy': 0.01 } },
-        [EconomicSectorType.INDUSTRY]: { type: EconomicSectorType.INDUSTRY, output: r.gdp * 0.3, employment: r.population * 0.1, efficiency: 0.6, resourceNeeds: { [StrategicResourceType.RARE_METALS]: 0.01, [StrategicResourceType.WATER]: 0.01, 'energy': 0.05 } },
-        [EconomicSectorType.SERVICES]: { type: EconomicSectorType.SERVICES, output: r.gdp * 0.4, employment: r.population * 0.15, efficiency: 0.8, resourceNeeds: { [StrategicResourceType.DATA_CONDUITS]: 0.005, 'energy': 0.02 } },
-        [EconomicSectorType.ENERGY]: { type: EconomicSectorType.ENERGY, output: r.gdp * 0.2, employment: r.population * 0.02, efficiency: 0.75, resourceNeeds: { [StrategicResourceType.EXOTIC_ISOTOPES]: 0.001, [StrategicResourceType.WATER]: 0.005 } },
+        [EconomicSectorType.AGRICULTURE]: {
+          type: EconomicSectorType.AGRICULTURE, output: r.gdp * 0.1, employment: r.population * 0.05, efficiency: 0.7,
+          inputResourceNeeds: { [StrategicResourceType.WATER]: 0.02, 'energy': 0.005 } // water per 1k output, energy per 1k output
+        },
+        [EconomicSectorType.INDUSTRY]: {
+          type: EconomicSectorType.INDUSTRY, output: r.gdp * 0.3, employment: r.population * 0.1, efficiency: 0.6,
+          inputResourceNeeds: { [StrategicResourceType.RARE_METALS]: 0.01, 'energy': 0.05, [StrategicResourceType.WATER]: 0.01 } // Example: 0.05 energy per 1k output
+        },
+        [EconomicSectorType.SERVICES]: {
+          type: EconomicSectorType.SERVICES, output: r.gdp * 0.4, employment: r.population * 0.15, efficiency: 0.8,
+          inputResourceNeeds: { [StrategicResourceType.DATA_CONDUITS]: 0.005, 'energy': 0.02 }
+        },
+        [EconomicSectorType.ENERGY]: {
+          type: EconomicSectorType.ENERGY, output: r.gdp * 0.2, employment: r.population * 0.02, efficiency: 0.75,
+          inputResourceNeeds: { [StrategicResourceType.EXOTIC_ISOTOPES]: 0.001 } // e.g. for fusion, or could be other base inputs for conventional
+        },
       };
-      // Ensure initial GDP is sum of sector outputs
       const calculatedGdp = Object.values(initialSectors).reduce((sum, sector) => sum + sector.output, 0);
       const initialTotalEmployment = Object.values(initialSectors).reduce((sum, sector) => sum + sector.employment, 0);
 
       // Initial demographics setup
       const initialDemographics: RegionDemographics = {
-        workingAgePopulation: r.population * 0.65, // Assume 65% are of working age
-        unemployedPopulation: Math.max(0, (r.population * 0.65) - initialTotalEmployment), // Working age minus employed
-        educationLevel: 50 + (r.gdp / r.population / 1000), // Simple heuristic for education based on per capita GDP
+        workingAgePopulation: r.population * 0.65,
+        unemployedPopulation: Math.max(0, (r.population * 0.65) - initialTotalEmployment),
+        educationLevel: 50 + (r.gdp / Math.max(1,r.population) / 1000),
+        birthRate: 0.02 + (r.health / 100 - 0.5) * 0.015, // Base rate 20/1000, modified by health. Max ~35/1000, Min ~5/1000
+        deathRate: 0.015 - (r.health / 100 - 0.5) * 0.013, // Base rate 15/1000, modified by health. Max ~28/1000, Min ~2/1000
       };
-      initialDemographics.educationLevel = Math.max(10, Math.min(95, initialDemographics.educationLevel)); // Clamp education
+      initialDemographics.educationLevel = Math.max(10, Math.min(95, initialDemographics.educationLevel));
+      initialDemographics.birthRate = Math.max(0.002, Math.min(0.05, initialDemographics.birthRate)); // Clamp birth rate
+      initialDemographics.deathRate = Math.max(0.001, Math.min(0.04, initialDemographics.deathRate)); // Clamp death rate
+
 
       return {
         ...r,
@@ -252,7 +271,61 @@ export class GameEngine {
         demographics: initialDemographics,
         resourceDemand: createInitialResourceValues(r.population, calculatedGdp, true),
         resourceProduction: createInitialResourceValues(r.population, calculatedGdp, false),
+        dominantBiome: BiomeType.PLAINS, // Placeholder: Assign a default biome. Will be refined.
       };
+    });
+
+    // Assign biomes more intelligently (simple latitude-based for now)
+    regions.forEach(region => {
+      // Approximate latitude: y-coordinate (0 is equator, positive is North, negative is South)
+      // Assuming y ranges roughly from -0.5 to 0.5 for major landmasses based on initial data
+      const approxLatPercent = (region.y + 0.5); // Ranges 0 (South Pole) to 1 (North Pole)
+
+      if (approxLatPercent < 0.15 || approxLatPercent > 0.85) { // Polar regions
+        region.dominantBiome = BiomeType.POLAR_ICE;
+        if (approxLatPercent > 0.15 && approxLatPercent < 0.25 || approxLatPercent < 0.85 && approxLatPercent > 0.75) {
+          region.dominantBiome = BiomeType.TUNDRA; // Transition to Tundra closer to temperate
+        }
+      } else if (approxLatPercent < 0.3 || approxLatPercent > 0.7) { // Sub-polar / Boreal
+        region.dominantBiome = BiomeType.BOREAL_FOREST; // Taiga
+      } else if (approxLatPercent < 0.4 || approxLatPercent > 0.6) { // Temperate
+        // Could add more logic here based on x-coordinate (continental vs coastal) for moisture
+        const isCoastal = Math.abs(region.x) > 0.5; // Very rough coastal check
+        region.dominantBiome = isCoastal ? BiomeType.TEMPERATE_FOREST : BiomeType.GRASSLAND;
+      } else { // Tropical/Equatorial
+         // Crude check for deserts vs rainforests based on existing environment score or x-coord
+        if (region.environment < 55 && (Math.abs(region.x) < 0.3 || Math.abs(region.x) > 0.7)) { // Inland or specific longitude bands for deserts
+            region.dominantBiome = BiomeType.DESERT;
+        } else {
+            region.dominantBiome = BiomeType.TROPICAL_RAINFOREST;
+        }
+      }
+
+      // Specific overrides based on name for obvious cases
+      if (region.name.toLowerCase().includes('africa') && region.dominantBiome !== BiomeType.DESERT) {
+        // A large part of Africa is Savannah (Grassland) or Desert
+        if (region.y > -0.05 && region.y < 0.15) region.dominantBiome = BiomeType.TROPICAL_RAINFOREST; // Congo basin like
+        else if (region.y < -0.2 || region.y > 0.2) region.dominantBiome = BiomeType.DESERT; // Sahara/Kalahari like
+        else region.dominantBiome = BiomeType.GRASSLAND; // Savannah
+      }
+      if (region.name.toLowerCase().includes('america')) {
+          if (region.id === 'na' && region.y > 0.35) region.dominantBiome = BiomeType.BOREAL_FOREST; // Canada/Alaska
+          else if (region.id === 'na' && region.y < 0.15 && region.x < -0.55) region.dominantBiome = BiomeType.DESERT; // SW USA
+          else if (region.id === 'sa' && region.y > -0.1 && region.y < 0.1) region.dominantBiome = BiomeType.TROPICAL_RAINFOREST; // Amazon
+          else if (region.id === 'sa' && region.y < -0.2) region.dominantBiome = BiomeType.GRASSLAND; // Pampas / Patagonia plains
+      }
+       if (region.name.toLowerCase().includes('asia')) {
+        if (region.x > 0.6 && region.y > 0.25) region.dominantBiome = BiomeType.BOREAL_FOREST; // Siberia
+        else if (region.x > 0.5 && region.y < 0.1) region.dominantBiome = BiomeType.DESERT; // Middle East / Gobi
+        else if (region.x > 0.45 && region.y > 0.05 && region.y < 0.25) region.dominantBiome = BiomeType.TEMPERATE_FOREST; // China/Japan like
+        else if (region.x > 0.4 && region.y > -0.05 && region.y < 0.05) region.dominantBiome = BiomeType.TROPICAL_RAINFOREST; // SE Asia
+      }
+      if (region.name.toLowerCase().includes('oceania')) {
+        region.dominantBiome = BiomeType.DESERT; // Australia is largely desert
+        if (region.x > 0.85 && region.y < -0.35) region.dominantBiome = BiomeType.TEMPERATE_FOREST; // NZ like
+      }
+
+
     });
 
     const numberOfHexagons = 256;
@@ -897,20 +970,47 @@ private applyConflict(eventA: RegionEvent, eventB: RegionEvent, conflictDef: Non
 
 
         // Resource availability impact on this sector's output/efficiency
-        let sectorResourceShortageImpact = 0;
-        if (sector.resourceNeeds) {
-            for (const resKey in sector.resourceNeeds) {
-                const requiredAmount = sector.resourceNeeds[resKey as keyof typeof sector.resourceNeeds]! * sector.output; // Simplified: needs scale with current output
-                const availableAmount = newRegion.resourceProduction[resKey as StrategicResourceType] || 0; // Assuming string keys match StrategicResourceType or general resources
-                const demandMetFactor = Math.min(1, (availableAmount + 0.01) / (requiredAmount + 0.01) ); // Avoid division by zero
+        let sectorResourceShortageImpactFactor = 1.0; // Factor from 0 to 1, 1 means no shortage
+        if (sector.inputResourceNeeds) {
+            for (const resKey in sector.inputResourceNeeds) {
+                const typedResKey = resKey as StrategicResourceType | string;
+                // Needs are per 1000 units of output. So for current output, scale it.
+                // Or, if it's a flat per-tick need (e.g. for 'energy' as string key), use it directly.
+                let requiredAmountPerTick = 0;
+                if (Object.values(StrategicResourceType).includes(typedResKey as StrategicResourceType)) {
+                     requiredAmountPerTick = sector.inputResourceNeeds[typedResKey]! * (sector.output / 1000) * tickDelta;
+                } else { // Assume flat per-tick if not a StrategicResourceType (e.g. 'energy' string for now)
+                     requiredAmountPerTick = sector.inputResourceNeeds[typedResKey]! * tickDelta;
+                }
 
-                if (demandMetFactor < 0.8) { // Significant shortage
-                    sectorResourceShortageImpact -= (1 - demandMetFactor) * 0.002; // Penalty for shortage
-                    sector.efficiency *= (1 - (1 - demandMetFactor) * 0.001 * tickDelta); // Efficiency drop due to shortage
+                // How to determine availableAmount?
+                // Option 1: Regional production only.
+                // Option 2: Regional production + player's global stockpile (if this region is player-controlled or benefits from player resources).
+                // For now, let's use a simplified regional availability.
+                // A more complex model would involve resource distribution.
+                const availableAmountInRegion = (newRegion.resourceProduction[typedResKey as StrategicResourceType] || 0) * tickDelta;
+
+                // If player resources should contribute (complex to model perfectly without ownership/distribution)
+                // Let's assume for now a portion of player's global resources could conceptually be available.
+                // This part is highly abstract without a clear owner for the region or a market.
+                // Sticking to regional production for simplicity in this step.
+                // const playerOwner = Object.values(state.players).find(p => p.activeFacilities.some(f => f.regionId === newRegion.id));
+                // const playerGlobalResource = playerOwner ? (playerOwner.globalResources[typedResKey] || 0) : 0;
+                // const availableAmount = availableAmountInRegion + playerGlobalResource * 0.01; // Tiny fraction of global stockpile hypothetically available
+
+                const demandMetFactor = Math.min(1, (availableAmountInRegion + 0.001) / (requiredAmountPerTick + 0.001));
+
+                if (demandMetFactor < 1.0) { // Any shortage impacts efficiency
+                    // The impact of a single resource shortage could be averaged or the worst one taken.
+                    // Let's average the impact factor.
+                    sectorResourceShortageImpactFactor = Math.min(sectorResourceShortageImpactFactor, demandMetFactor);
                 }
             }
         }
-        sectorGrowthFactor += sectorResourceShortageImpact;
+        // Apply the overall shortage factor to efficiency AND output growth
+        sector.efficiency *= (1 - (1 - sectorResourceShortageImpactFactor) * 0.1 * tickDelta); // Efficiency hit from shortage
+        sectorGrowthFactor *= sectorResourceShortageImpactFactor; // Reduce growth if inputs are scarce
+
         sector.output *= (1 + sectorGrowthFactor * tickDelta);
         sector.output = Math.max(1, sector.output); // Minimum sector output
         sector.efficiency = Math.max(0.1, Math.min(1, sector.efficiency)); // Clamp efficiency
@@ -1014,17 +1114,44 @@ private applyConflict(eventA: RegionEvent, eventB: RegionEvent, conflictDef: Non
         }
     });
     
-    // Population change based on health, environment, stability, and potentially resource availability
-    let populationGrowthRate = (newRegion.health / 100 - 0.4) * 0.001; // Base health contribution
-    populationGrowthRate += (newRegion.environment / 100 - 0.5) * 0.0005; // Environment
-    populationGrowthRate += (newRegion.stability / 100 - 0.4) * 0.0008; // Stability
-    // If severe resource shortages, reduce population growth or cause decline
-    if (normalizedBalanceImpact < -0.5) { // If average resource deficit is more than 50%
-        populationGrowthRate -= Math.abs(normalizedBalanceImpact) * 0.001;
-    }
-    const populationChange = newRegion.population * populationGrowthRate * tickDelta;
-    newRegion.population = Math.max(0, newRegion.population + populationChange);
+    // --- Update Demographics (Births, Deaths) & Population ---
+    // Base birth rate influenced by health, food availability
+    let currentBirthRate = newRegion.demographics.birthRate; // Start with the region's base rate
+    currentBirthRate *= (newRegion.health / 70); // Healthier population, higher birth rate (normalized around 70 health)
+    const foodAvailabilityFactor = Math.min(1, (newRegion.resourceProduction[StrategicResourceType.FOOD] + 0.1) / (newRegion.resourceDemand[StrategicResourceType.FOOD] + 0.1));
+    currentBirthRate *= (0.8 + foodAvailabilityFactor * 0.2); // Food shortages reduce birth rate (up to 20% reduction from this factor)
+    currentBirthRate = Math.max(0.001, Math.min(0.055, currentBirthRate)); // Clamp final rate
+
+    // Base death rate influenced by health, food availability, active pandemics
+    let currentDeathRate = newRegion.demographics.deathRate; // Start with region's base rate
+    currentDeathRate *= (120 - newRegion.health) / 70; // Lower health, higher death rate (normalized around 70 health)
+    currentDeathRate *= (1.2 - foodAvailabilityFactor * 0.2); // Food shortages increase death rate
     
+    const pandemicEvents = state.activeEvents.filter(e => e.active && this.isEventInRegion(e, newRegion) && (e.type === EventType.PANDEMIC || e.type === EventType.BIOLOGICAL_WEAPON));
+    if (pandemicEvents.length > 0) {
+        const avgPandemicSeverity = pandemicEvents.reduce((sum, ev) => sum + ev.severity, 0) / pandemicEvents.length;
+        currentDeathRate += avgPandemicSeverity * 0.02; // Pandemics significantly increase death rate
+    }
+    currentDeathRate = Math.max(0.0005, Math.min(0.06, currentDeathRate)); // Clamp final rate
+
+    // Store updated rates
+    newRegion.demographics.birthRate = currentBirthRate;
+    newRegion.demographics.deathRate = currentDeathRate;
+
+    // Population change calculation
+    // The rates are per 1000, so divide by 1000 for direct multiplier, or ensure rates are already fractional.
+    // Assuming rates are already fractional (e.g., 0.02 for 20 per 1000)
+    const births = newRegion.population * currentBirthRate * tickDelta;
+    const deaths = newRegion.population * currentDeathRate * tickDelta;
+    const netPopulationChange = births - deaths;
+    newRegion.population = Math.max(0, newRegion.population + netPopulationChange);
+
+    // Update working age population (simple percentage for now)
+    newRegion.demographics.workingAgePopulation = newRegion.population * 0.65;
+    newRegion.demographics.workingAgePopulation = Math.max(0, newRegion.demographics.workingAgePopulation);
+    // Unemployment will be recalculated after sector employment updates.
+    // --- End Population Update ---
+
     return newRegion;
   }
   

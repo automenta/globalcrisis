@@ -50,6 +50,7 @@ export function useGameInitialization({
   setContextMenu,
   setSelectedHexagonDetails,
   setHexagonPanelPosition,
+  setSelectedRegionForPanel, // Added setter for selected region panel
   setSelectingHexForScan,
   setAppTargetedHexIdForBuild,
   setSelectingHexForBuilding,
@@ -81,88 +82,19 @@ export function useGameInitialization({
       localAudio = new WarRoomAudio();
       audioRef.current = localAudio;
 
-      // Setup event handlers for Earth3D
-      localEarth3D.onRegionClick = (region, x, y) => {
-        setContextMenu({
-          visible: true,
-          x,
-          y,
-          region,
-          satellite: null,
-          event: null,
-          type: 'region',
-          target: region,
-        });
-      };
+      // The primary click handlers (onRegionClick, onSatelliteClick, onHexagonClick)
+      // will now be assigned in App.tsx's useEffect hook. This hook, useGameInitialization,
+      // is responsible for creating the Earth3D instance. App.tsx will then take
+      // that instance (earth3DRef.current) and attach its own state-aware handlers to it.
+      // This avoids stale closure issues with handlers defined directly in this hook's useEffect,
+      // especially for handlers that need to read the latest App.tsx state like 'selectingHexForScan'
+      // or 'gameState'.
 
-      localEarth3D.onSatelliteClick = (satellite, x, y) => {
-        setContextMenu({
-          visible: true,
-          x,
-          y,
-          region: null,
-          satellite,
-          event: null,
-          type: 'satellite',
-          target: satellite,
-        });
-      };
-
-      localEarth3D.onHexagonClick = (hexagonId, _hexagonCenter, clickX, clickY) => {
-        // Access gameState via a function passed to setGameState to ensure freshest state
-        // or ensure this useEffect reruns if gameState identity changes (which it does).
-        // For now, this relies on the App.tsx passing down the current gameState,
-        // which will be captured by this closure when the hook runs.
-        // A more robust way might involve passing a getter for gameState or gameEngineRef.current.
-        // This is a common challenge with useEffect and refs.
-
-        // The App.tsx will manage the state reads for these click handlers for now.
-        // This hook sets up the click handlers, but the logic within them
-        // (reading gameState, calling gameEngineRef.current methods) will be in App.tsx's callbacks.
-        // So, onHexagonClick in App.tsx will need access to gameEngineRef.current and gameState.
-
-        // This hook's responsibility is primarily setting up the instance and the raw click listeners.
-        // The complex logic inside onHexagonClick (like geo_scan or building placement)
-        // will be triggered by App.tsx's version of onHexagonClick, which calls gameEngine methods.
-
-        // Simplified onHexagonClick for initialization hook:
-        // It prepares data for App.tsx to handle.
-        setGameState(currentGameState => {
-          if (!currentGameState || !gameEngineRef.current) return currentGameState;
-
-          const strategicResource = currentGameState.hexagonStrategicResources[hexagonId];
-          const facilitiesOnHex = currentGameState.activeFacilities.filter(f => f.hexagonId === hexagonId);
-
-          setSelectedHexagonDetails({
-            id: hexagonId,
-            strategicResource,
-            facilities: facilitiesOnHex,
-            events: [], // Placeholder
-          });
-          setHexagonPanelPosition({
-            x: Math.min(clickX + 15, window.innerWidth - 300),
-            y: Math.min(clickY + 15, window.innerHeight - 250),
-          });
-          setContextMenu(prev => ({ ...prev, visible: false }));
-
-
-          // The following logic needs to be in App.tsx's actual handler that receives these details.
-          // This hook just sets up the initial click. The state-dependent logic (selectingHexForScan, etc.)
-          // is too tightly coupled with App.tsx's state and handlers.
-          // So, onHexagonClick in App.tsx will need to check selectingHexForScan etc.
-          // For now, the hook passes the raw click info up.
-          // The `App.tsx` will have its own `onHexagonClick` that uses these refs.
-          // This is a bit of a dance. Let's adjust: Earth3D's onHexagonClick should just pass data.
-          // App.tsx's useEffect will set its own more complex handler on earth3DRef.current.
-
-          // Let's refine this: The hook should set up the *basic* click handlers on Earth3D
-          // that then call more complex handlers defined in App.tsx (or another hook).
-          // For now, the onHexagonClick in App.tsx will be assigned to earth3DRef.current.onHexagonClick
-          // *after* this initialization hook runs.
-
-          return currentGameState; // No state change from this basic setup part
-        });
-      };
+      // Placeholder for any truly basic, non-state-dependent handlers if needed in Earth3D,
+      // but for this project, most interaction logic resides in App.tsx.
+      // For example, if Earth3D had an internal 'onHover' that only changed its own internal state
+      // without needing App.tsx's state, it could be set here.
+      // localEarth3D.onSomeBasicEvent = () => console.log("Basic Earth3D event triggered");
 
       setIsInitialized(true);
       console.log('Game systems initialized by useGameInitialization.');

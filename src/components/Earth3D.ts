@@ -30,6 +30,8 @@ export interface ContextMenu {
   type: 'region' | 'satellite' | 'event';
   target: any;
 }
+import { SimplexNoise, fbm as simplexFbm } from '../lib/utils'; // Import SimplexNoise and fbm
+
 // #endregion Interfaces & Types
 
 export class Earth3D {
@@ -176,14 +178,79 @@ export class Earth3D {
   }
   
   private createAtmosphere() {
-    const geometry = new THREE.SphereGeometry(2.05, 32, 32);
-    const material = new THREE.MeshBasicMaterial({
-      color: 0x4a90ff,
+    const atmosphereGeometry = new THREE.SphereGeometry(2.05, 64, 64); // Increased segments for smoother look
+
+    // These imports would ideally be at the top of the file
+    // For now, assuming they are available or will be added by a build step
+    // import atmosphereVertexShader from '../shaders/atmosphereVertex.glsl';
+    // import atmosphereFragmentShader from '../shaders/atmosphereFragment.glsl';
+
+    // Placeholder for shader content if direct import isn't set up for strings
+    const atmosphereVertexShader = `
+      varying vec3 vNormal;
+      varying vec3 vPosition;
+      void main() {
+        vNormal = normalize(normalMatrix * normal);
+        vPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+    const atmosphereFragmentShader = `
+      uniform vec3 uSunPosition;
+      uniform vec3 uCameraPosition;
+      varying vec3 vNormal;
+      varying vec3 vPosition;
+
+      const vec3 kRayleighCoefficients = vec3(0.105, 0.224, 0.469); // Adjusted for less green
+      const float kScatteringStrength = 5.5; // Slightly increased strength
+
+      void main() {
+        vec3 rayDir = normalize(vPosition - uCameraPosition);
+        vec3 atmosphereOrigin = vec3(0.0); // Assuming atmosphere is centered at origin
+        vec3 normalToAtmosphereCenter = normalize(vPosition - atmosphereOrigin);
+
+        float viewNormalDot = dot(rayDir, normalToAtmosphereCenter);
+        // We want the effect to be strongest at the limb (grazing angles)
+        // viewNormalDot is close to 0 at limb, -1 when looking straight at center from outside, 1 if inside looking at center.
+        // Let's use (1.0 - abs(viewNormalDot)) for limb effect strength, or smoothstep for falloff.
+
+        // A simpler approach for limb effect: use vNormal (vertex normal) against camera direction
+        float limbFactor = 1.0 - dot(vNormal, -normalize(uCameraPosition - vPosition));
+        limbFactor = pow(limbFactor, 2.5); // Enhance the effect at the very edge
+
+        vec3 sunDir = normalize(uSunPosition); // Assume sun is directional (very far away)
+        float sunAngle = max(0.0, dot(normalToAtmosphereCenter, sunDir)); // How much this part of atmosphere is lit
+
+        vec3 scatteredLight = kRayleighCoefficients * kScatteringStrength * limbFactor;
+        scatteredLight *= (sunAngle * 0.8 + 0.2); // Modulate by sun, ensure some ambient on dark side
+
+        float alpha = limbFactor * 0.7 + 0.05; // More opaque at limb
+        alpha = clamp(alpha, 0.0, 1.0);
+
+        // Fade out if we are looking at the back faces of the sphere from outside
+        if (dot(vNormal, normalize(uCameraPosition - vPosition)) < 0.0) {
+             alpha = 0.0;
+        }
+
+        gl_FragColor = vec4(scatteredLight, alpha);
+      }
+    `;
+
+    const atmosphereMaterial = new THREE.ShaderMaterial({
+      vertexShader: atmosphereVertexShader,
+      fragmentShader: atmosphereFragmentShader,
+      uniforms: {
+        uSunPosition: { value: new THREE.Vector3(5, 3, 5) }, // Default, should be updated from light source
+        uCameraPosition: { value: this.camera.position },
+        // uAtmosphereRadius: { value: 2.05 }, // If needed by shader
+        // uEarthRadius: { value: 2.0 }, // If needed by shader
+      },
       transparent: true,
-      opacity: 0.15,
-      side: THREE.BackSide
+      side: THREE.FrontSide, // Render front side for this effect to work correctly when view from outside
+      // blending: THREE.AdditiveBlending, // Optional: for a more glowy effect, but can be too bright
     });
-    this.atmosphere = new THREE.Mesh(geometry, material);
+
+    this.atmosphere = new THREE.Mesh(atmosphereGeometry, atmosphereMaterial);
     this.scene.add(this.atmosphere);
   }
 
@@ -223,107 +290,97 @@ export class Earth3D {
   private createEarthTexture(ctx: CanvasRenderingContext2D, width: number, height: number) {
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
+    const simplex = new SimplexNoise('earth_texture_seed'); // Consistent seed for all noise calls here
 
-    // Basic FBM (Fractional Brownian Motion) and noise generation
-    // For a more robust solution, a proper simplex noise library might be imported or implemented.
-    // Using Math.random() here for simplicity to simulate noise, not true Perlin/Simplex.
-    const pseudoRandom = (x: number, y: number, seed: number) => {
-        let  val = Math.sin(x * 12.9898 + y * 78.233 + seed) * 43758.5453;
-        val = val - Math.floor(val);
-        return val;
+    // Helper for FBM using the single simplex instance
+    const fbm = (x: number, y: number, octaves: number, persistence: number, lacunarity: number, scale: number) => {
+        return simplexFbm(simplex, x, y, octaves, persistence, lacunarity, scale);
     };
 
-    const noise = (x: number, y: number, seed: number, scale: number) => {
-        const ix = Math.floor(x / scale);
-        const iy = Math.floor(y / scale);
-        const fx = (x / scale) - ix;
-        const fy = (y / scale) - iy;
+    // Generate elevation, temperature, and moisture maps
+    const elevationMap: number[][] = Array(height).fill(0).map(() => Array(width).fill(0));
+    const temperatureMap: number[][] = Array(height).fill(0).map(() => Array(width).fill(0));
+    const moistureMap: number[][] = Array(height).fill(0).map(() => Array(width).fill(0));
 
-        const a = pseudoRandom(ix, iy, seed);
-        const b = pseudoRandom(ix + 1, iy, seed);
-        const c = pseudoRandom(ix, iy + 1, seed);
-        const d = pseudoRandom(ix + 1, iy + 1, seed);
+    for (let j_map = 0; j_map < height; j_map++) { // Renamed to avoid conflict with loop var 'j' if any
+      for (let i_map = 0; i_map < width; i_map++) { // Renamed to avoid conflict
+        // Elevation: multiple layers of noise for continents, mountains, and roughness
+        const continentNoise = fbm(i_map, j_map, 4, 0.6, 2.0, width * 0.8); // Large features (scaled to texture width)
+        const mountainNoise = fbm(i_map, j_map, 5, 0.5, 2.2, width * 0.2);  // Medium features
+        const detailNoise = fbm(i_map, j_map, 3, 0.4, 2.5, width * 0.05); // Fine details
+        let elev = continentNoise * 0.6 + mountainNoise * 0.3 + detailNoise * 0.1;
+        elev = Math.pow(elev, 1.2); // Enhance contrast for landmasses
+        elevationMap[j_map][i_map] = elev;
 
-        const ux = fx * fx * (3.0 - 2.0 * fx);
-        const uy = fy * fy * (3.0 - 2.0 * fy);
+        // Temperature: primarily latitude-based, with some noise variation
+        const normalizedLat = j_map / height; // 0 (north pole) to 1 (south pole)
+        let temp = 1.0 - Math.abs(normalizedLat - 0.5) * 2; // Equator hot, poles cold (0 to 1)
+        temp = Math.pow(temp, 1.5); // Exaggerate equatorial heat
+        temp -= elev * 0.1; // Higher elevation is colder (small effect)
+        temp += (fbm(i_map, j_map, 2, 0.5, 2.0, width * 0.1) - 0.5) * 0.1; // Small random variation
+        temperatureMap[j_map][i_map] = Math.max(0, Math.min(1, temp));
 
-        return a * (1-ux) * (1-uy) + b * ux * (1-uy) + c * (1-ux) * uy + d * ux * uy;
-    };
-
-    const fbm = (x: number, y: number, seed: number, initialScale: number, octaves: number, persistence: number, lacunarity: number) => {
-        let total = 0;
-        let frequency = 1;
-        let amplitude = 1;
-        let maxValue = 0;
-        let scale = initialScale;
-
-        for(let i = 0; i < octaves; i++) {
-            total += noise(x * frequency, y * frequency, seed + i, scale) * amplitude;
-            maxValue += amplitude;
-            amplitude *= persistence;
-            frequency *= lacunarity;
-            // scale /= lacunarity; // Optional: scale can also change
+        // Moisture: influenced by proximity to oceans (from elevation) and some noise
+        const isOcean = elev < 0.42; // Ocean threshold (same as later)
+        let moist = isOcean ? 0.9 : 0.3;
+        moist += (fbm(i_map, j_map, 3, 0.5, 2.0, width * 0.08) - 0.5) * 0.4;
+        if (!isOcean && elev > 0.45) {
+            moist += (fbm(i_map, j_map, 2, 0.6, 2.0, width * 0.5) - 0.5) * 0.3;
         }
-        return total / maxValue;
-    };
+        moistureMap[j_map][i_map] = Math.max(0, Math.min(1, moist));
+      }
+    }
 
+    // Biome determination and coloring
+    for (let j_color = 0; j_color < height; j_color++) { // Renamed loop variable
+      for (let i_color = 0; i_color < width; i_color++) { // Renamed loop variable
+        const index = (j_color * width + i_color) * 4;
+        const elev = elevationMap[j_color][i_color];
+        const temp = temperatureMap[j_color][i_color];
+        const moist = moistureMap[j_color][i_color];
 
-    for (let j = 0; j < height; j++) { // y-coordinate, latitude
-      for (let i = 0; i < width; i++) { // x-coordinate, longitude
-        const index = (j * width + i) * 4;
+        let r_col=0, g_col=0, b_col=0; // Renamed r,g,b to avoid conflict
 
-        // Normalized coordinates for texture mapping (lon, lat)
-        const u = i / width; // 0 to 1
-        const v = j / height; // 0 to 1
-
-        // Convert to spherical coordinates if needed for more accurate mapping,
-        // but for direct texture painting, u,v is fine.
-        // For latitude effect (poles vs equator)
-        const lat = (v - 0.5) * -Math.PI; // -PI/2 to PI/2 (South Pole to North Pole)
-        // const lon = (u - 0.5) * 2 * Math.PI; // -PI to PI (optional if longitude affects biomes)
-
-
-        // Elevation calculation using FBM
-        // Parameters for FBM: x, y, seed, initialScale, octaves, persistence, lacunarity
-        const elevation = fbm(i, j, 100, 128, 5, 0.5, 2.0); // Base elevation
-        const roughness = fbm(i, j, 200, 32, 3, 0.6, 2.2);  // For finer details/roughness
-        const finalElevation = (elevation * 0.75 + roughness * 0.25);
-
-        // Ocean
-        let r = 10 + finalElevation * 20;
-        let g = 50 + finalElevation * 40;
-        let b = 120 + finalElevation * 80;
-
-        if (finalElevation > 0.42) { // Land threshold
-          const absLatDegrees = Math.abs(lat * 180 / Math.PI);
-
-          if (absLatDegrees > 75) { // Polar Ice Caps
-            const iceNoise = fbm(i,j, 456, 16, 2, 0.5, 2.0)
-            r = 230 + iceNoise * 25;
-            g = 235 + iceNoise * 20;
-            b = 240 + iceNoise * 15;
-          } else if (absLatDegrees > 20 && absLatDegrees < 40 && finalElevation < 0.6 && roughness < 0.5) { // Desert Belt (simplified)
-            r = 210 + (finalElevation - 0.42) * 50 + roughness * 20;
-            g = 180 + (finalElevation - 0.42) * 50 + roughness * 10;
-            b = 100 + (finalElevation - 0.42) * 30;
-          } else { // Forests, Grasslands, Mountains
-            const mountainFactor = Math.max(0, (finalElevation - 0.65) / 0.35); // Higher elevation = more grey/rocky
-            const greenNoise = fbm(i,j, 789, 64, 3, 0.5, 2.0);
-
-            const baseGreenR = 34 + greenNoise * 30;
-            const baseGreenG = 80 + greenNoise * 50;
-            const baseGreenB = 20 + greenNoise * 20;
-
-            // Blend towards grey/brown for mountains
-            r = baseGreenR * (1 - mountainFactor) + (100 + roughness * 30) * mountainFactor;
-            g = baseGreenG * (1 - mountainFactor) + (90 + roughness * 30) * mountainFactor;
-            b = baseGreenB * (1 - mountainFactor) + (80 + roughness * 30) * mountainFactor;
+        // Determine biome (simplified Whittaker diagram logic)
+        if (elev < 0.42) { // Ocean
+          r_col = 10 + elev * 40; g_col = 50 + elev * 80; b_col = 120 + elev * 120;
+          if (temp < 0.15 && elev > 0.35) {
+            r_col = 180 + temp * 50; g_col = 200 + temp * 50; b_col = 220 + temp * 30;
+          }
+        } else { // Land
+          if (temp < 0.1) {
+            r_col = 230 + (1-elev)*25; g_col = 235 + (1-elev)*20; b_col = 240 + (1-elev)*15;
+            if (temp > 0.05 && moist > 0.2) {
+              r_col = 160 + moist*20; g_col = 170 + moist*20; b_col = 150 + moist*20;
+            }
+          } else if (temp < 0.3) {
+            r_col = 60 + moist*20; g_col = 100 + moist*30; b_col = 70 + moist*20;
+            if (elev > 0.7) { r_col=100; g_col=90; b_col=80; }
+          } else if (temp < 0.7) {
+            if (moist > 0.6) {
+              r_col = 34 + elev*20; g_col = 120 - elev*30; b_col = 40 + elev*10;
+            } else if (moist > 0.3) {
+              r_col = 100 + elev*20; g_col = 130 - elev*20; b_col = 60;
+            } else {
+              r_col = 180 + elev*10; g_col = 160 + elev*10; b_col = 120;
+            }
+             if (elev > 0.75) { r_col=120; g_col=110; b_col=100; }
+          } else {
+            if (moist > 0.65) {
+              r_col = 20 + temp*10; g_col = 90 + temp*20; b_col = 30 + temp*10;
+            } else if (moist > 0.3) {
+              r_col = 160 + temp*20; g_col = 140 - temp*10; b_col = 50;
+            } else {
+              r_col = 210 + temp*10; g_col = 180 + temp*5; b_col = 100;
+            }
+             if (elev > 0.7) { r_col=150; g_col=130; b_col=110; }
           }
         }
 
-        data[index] = Math.max(0, Math.min(255, r));
-        data[index + 1] = Math.max(0, Math.min(255, g));
-        data[index + 2] = Math.max(0, Math.min(255, b));
+        const colorNoise = (simplex.noise2D(i_color * 0.1, j_color * 0.1) + 1) / 2 * 15;
+        data[index] = Math.max(0, Math.min(255, r_col + colorNoise));
+        data[index + 1] = Math.max(0, Math.min(255, g_col + colorNoise));
+        data[index + 2] = Math.max(0, Math.min(255, b_col + colorNoise));
         data[index + 3] = 255;
       }
     }
@@ -334,47 +391,25 @@ export class Earth3D {
     const imageData = ctx.createImageData(width, height);
     const data = imageData.data;
     const elevations: number[][] = Array(height).fill(0).map(() => Array(width).fill(0));
+    const simplex = new SimplexNoise('normal_map_seed_v2'); // Changed seed to ensure different noise pattern if desired
 
-    // FBM noise generation (consistent with createEarthTexture)
-    const pseudoRandom = (x: number, y: number, seed: number) => {
-        let val = Math.sin(x * 12.9898 + y * 78.233 + seed) * 43758.5453;
-        val = val - Math.floor(val);
-        return val;
-    };
-    const noise = (x: number, y: number, seed: number, scale: number) => {
-        const ix = Math.floor(x / scale);
-        const iy = Math.floor(y / scale);
-        const fx = (x / scale) - ix;
-        const fy = (y / scale) - iy;
-        const a = pseudoRandom(ix, iy, seed);
-        const b = pseudoRandom(ix + 1, iy, seed);
-        const c = pseudoRandom(ix, iy + 1, seed);
-        const d = pseudoRandom(ix + 1, iy + 1, seed);
-        const ux = fx * fx * (3.0 - 2.0 * fx);
-        const uy = fy * fy * (3.0 - 2.0 * fy);
-        return a * (1-ux) * (1-uy) + b * ux * (1-uy) + c * (1-ux) * uy + d * ux * uy;
-    };
-    const fbm = (x: number, y: number, seed: number, initialScale: number, octaves: number, persistence: number, lacunarity: number) => {
-        let total = 0, frequency = 1, amplitude = 1, maxValue = 0, scale = initialScale;
-        for(let k = 0; k < octaves; k++) { // Renamed loop variable to avoid conflict with outer scope 'i'
-            total += noise(x * frequency, y * frequency, seed + k, scale) * amplitude;
-            maxValue += amplitude;
-            amplitude *= persistence;
-            frequency *= lacunarity;
-        }
-        return total / maxValue;
+    const fbm = (x: number, y: number, octaves: number, persistence: number, lacunarity: number, scale: number) => {
+        return simplexFbm(simplex, x, y, octaves, persistence, lacunarity, scale);
     };
 
-    for (let j = 0; j < height; j++) {
-      for (let i = 0; i < width; i++) {
-        // Use the same FBM parameters as in createEarthTexture for elevation calculation
-        const elevation = fbm(i, j, 100, 128, 5, 0.5, 2.0); // Base elevation for landmass
-        const roughness = fbm(i, j, 200, 32, 3, 0.6, 2.2);  // Roughness
-        const finalElevation = (elevation * 0.75 + roughness * 0.25);
-        elevations[j][i] = finalElevation; // Store raw FBM value, which is already 0-1 like
+    // Re-generate elevation map for normal map using the same logic as createEarthTexture's new elevation
+    for (let j_map = 0; j_map < height; j_map++) {
+      for (let i_map = 0; i_map < width; i_map++) {
+        const continentNoise = fbm(i_map, j_map, 4, 0.6, 2.0, width * 0.8);
+        const mountainNoise = fbm(i_map, j_map, 5, 0.5, 2.2, width * 0.2);
+        const detailNoise = fbm(i_map, j_map, 3, 0.4, 2.5, width * 0.05);
+        let elev = continentNoise * 0.6 + mountainNoise * 0.3 + detailNoise * 0.1;
+        elev = Math.pow(elev, 1.2);
+        elevations[j_map][i_map] = elev;
       }
     }
-    const strength = 2.0; // Adjusted strength, might need tuning
+
+    const strength = 2.0;
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const index = (y * width + x) * 4;
@@ -766,31 +801,32 @@ export class Earth3D {
       satellite.mesh.children.forEach(child => {
         if (child instanceof THREE.Mesh) {
           const material = child.material as THREE.MeshPhongMaterial;
-          // Assuming the first material or a specifically named one is the one to change color
-          // This is a simplification; a more robust way would be to tag meshes or materials.
           if (!satellite.active) {
-            material.color.setHex(0x555555); // Dark grey for inactive
+            material.color.setHex(0x555555);
             if (material.emissive) material.emissive.setHex(0x000000);
           } else if (satellite.compromised) {
-            material.color.setHex(0xff8800); // Orange for compromised
-            if (material.emissive) material.emissive.setHex(0x331100); // Dim emissive orange
+            material.color.setHex(0xff8800);
+            if (material.emissive) material.emissive.setHex(0x331100);
           } else {
-            // Restore original color - this requires knowing the original color.
-            // For now, let's assume the 'material' assigned in createSatellite is the primary one.
-            // This part needs a more robust solution if colors are complex.
-            // As a placeholder, we find the originally colored part.
-            if (child.userData.isPrimaryColorPart) { // We'd need to set this userData in createSatellite
+            if (child.userData.isPrimaryColorPart) {
                material.color.setHex(child.userData.originalColor);
                if (material.emissive) material.emissive.setHex(0x000000);
             } else if (child.userData.isPanel) {
-              material.color.setHex(0x223366); // Panel color
+              material.color.setHex(0x223366);
             } else {
-              material.color.setHex(0xaaaaaa); // Default body color
+              material.color.setHex(0xaaaaaa);
             }
           }
         }
       });
     });
+
+    // Update atmosphere shader uniforms
+    if (this.atmosphere.material instanceof THREE.ShaderMaterial) {
+      this.atmosphere.material.uniforms.uCameraPosition.value.copy(this.camera.position);
+      // If sun position is dynamic, update it here as well:
+      // this.atmosphere.material.uniforms.uSunPosition.value.copy(this.sunLight.position); // Assuming sunLight is accessible
+    }
     
     this.renderer.render(this.scene, this.camera);
   };

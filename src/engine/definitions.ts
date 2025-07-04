@@ -365,6 +365,8 @@ export interface PlanetaryFacilityDefinition {
     primarySector?: EconomicSectorType; // The main economic sector this facility belongs to or primarily boosts
     sectorEfficiencyBoost?: Partial<Record<EconomicSectorType, number>>; // e.g. { INDUSTRY: 0.05 } for a 5% boost to industry efficiency
     sectorOutputBoost?: Partial<Record<EconomicSectorType, number>>; // e.g. { ENERGY: 100 } for a flat output boost to energy sector
+    // Defines input needs for the facility itself, which might also affect regional demand if large enough
+    facilityInputNeeds?: Partial<Record<StrategicResourceType | string, number>>; // e.g., { energy: 0.1 } per tick
   };
   maintenanceCost?: Partial<Record<StrategicResourceType | string, number>>; // Resources consumed per tick for upkeep
 }
@@ -525,6 +527,21 @@ export const POLICY_DEFINITIONS: Record<PolicyType, PolicyDefinition> = {
   }
 };
 
+export enum BiomeType {
+  OCEAN = 'ocean',
+  TROPICAL_RAINFOREST = 'tropical_rainforest',
+  TEMPERATE_FOREST = 'temperate_forest',
+  BOREAL_FOREST = 'boreal_forest', // Taiga
+  GRASSLAND = 'grassland', // Includes savannahs, prairies
+  DESERT = 'desert',
+  TUNDRA = 'tundra',
+  POLAR_ICE = 'polar_ice',
+  MOUNTAIN = 'mountain', // Can overlay other biomes or be distinct
+  SWAMP = 'swamp', // Wetlands, marshes
+  JUNGLE = 'jungle', // Often used interchangeably with Tropical Rainforest, but can be denser/wetter subtype
+  PLAINS = 'plains' // Similar to grassland but perhaps flatter, less tree cover
+}
+
 // Central registry for all facility definitions.
 // This allows for easy addition and modification of facility types.
 export const FACILITY_DEFINITIONS: Record<FacilityType, PlanetaryFacilityDefinition> = {
@@ -579,11 +596,13 @@ export const FACILITY_DEFINITIONS: Record<FacilityType, PlanetaryFacilityDefinit
     constructionTime: 15,
     economicImpact: {
         gdpBoostPerTick: 0.02,
-        regionalProductionModifier: { [StrategicResourceType.RARE_METALS]: 1.01 }, // General extraction helps regional strategics
-        primarySector: EconomicSectorType.INDUSTRY, // Resource extraction is an industrial activity
-        sectorOutputBoost: { [EconomicSectorType.INDUSTRY]: 10 } // Directly boosts industrial output slightly
+        regionalProductionModifier: { [StrategicResourceType.RARE_METALS]: 1.01 },
+        primarySector: EconomicSectorType.INDUSTRY,
+        sectorOutputBoost: { [EconomicSectorType.INDUSTRY]: 10 },
+        facilityInputNeeds: { energy: 0.02 } // Example: Regional extractors need some energy
     },
-    maintenanceCost: { energy: 0.01 }
+    maintenanceCost: { energy: 0.01 } // Note: facilityInputNeeds and maintenanceCost can overlap or be distinct.
+                                      // Here, maintenance is credits/upkeep, inputNeeds is operational.
   },
   [FacilityType.STRATEGIC_RESOURCE_NODE]: {
     name: 'Strategic Resource Node',
