@@ -365,8 +365,21 @@ class PhenomenonManager {
         this.gameState.activePhenomena.push(phenomenon);
         console.log(`Phenomenon Activated: ${phenomenon.name} (ID: ${phenomenon.id}), Scope: ${phenomenon.scope}, Target: ${(phenomenon as any).targetId || 'Global'}`);
 
+        const eventBus = EventBus.getInstance();
+
         // Specific activation logic for certain phenomenon types
-        if (phenomenon.type === PhenomenonTypes.PHENOMENON_WHISTLEBLOWER_LEAKS) {
+        if (phenomenon.type === PhenomenonTypes.PHENOMENON_RIOTS) {
+            const riotData = phenomenon.parameters as PhenomenonTypes.RiotsData;
+            if (riotData && riotData.targetHexId) { // Ensure targetHexId is present
+                const payload: TriggerParticleEffectPayload = {
+                    effectType: 'riot',
+                    hexCellId: riotData.targetHexId,
+                    intensity: riotData.intensity,
+                    duration: phenomenon.duration, // Pass duration for emitter lifetime management
+                };
+                eventBus.publish(VisualEffectEvent.TRIGGER_PARTICLE_EFFECT, payload, 'PhenomenonManager', this.gameState.time);
+            }
+        } else if (phenomenon.type === PhenomenonTypes.PHENOMENON_WHISTLEBLOWER_LEAKS) {
             const leakData = phenomenon.parameters as PhenomenonTypes.WhistleblowerLeakSpawnData;
             const existingWhistleblowerInHex = Array.from(this.engine.entityManager['gameState'].entities.values()).find(
                 e => e.type === 'whistleblower' && e.location.hexCellId === leakData.spawnLocationHexId
@@ -464,6 +477,7 @@ import { HexGridManager, HexCell } from './HexGridManager';
 import * as THREE from 'three';
 import * as ActionTypes from './actions/actionTypes';
 import * as PhenomenonTypes from './phenomena/phenomenonTypes';
+import { EventBus, VisualEffectEvent, TriggerParticleEffectPayload } from './EventBus'; // Added EventBus and related imports
 
 export class GameEngine {
   private gameState: GameState;
