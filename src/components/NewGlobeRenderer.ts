@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import SimplexNoise from 'simplex-noise';
+import { ParticleManager, ParticleEmitterConfig } from './ParticleSystem';
+import { EventBus, VisualEffectEvent, TriggerParticleEffectPayload } from '../engine/EventBus'; // Added EventBus imports
 // Updated GameEngine import to reflect new structure
 import {
     GameState,
@@ -21,7 +23,9 @@ import {
 // Legacy entity imports (to be removed or adapted if their components are reused)
 import { SatelliteEntity, ISatelliteDataComponent, DEFAULT_SATELLITE_DATA_COMPONENT_NAME, SatelliteType } from '../engine/entities/SatelliteEntity';
 import { ITransformComponent, DEFAULT_TRANSFORM_COMPONENT_NAME } from '../engine/components/TransformComponent';
-import { IHealthComponent } from '../engine/components/HealthComponent'; // May be reused for SH entities if they adopt components
+// import { IHealthComponent } from '../engine/components/HealthComponent'; // May be reused for SH entities if they adopt components
+// The IHealthComponent seems to be commented out or not fully integrated in the original file for SH entities.
+// If status indicators are needed based on health for SH entities, this might need to be revisited.
 import { IPhysicsPropertiesComponent, DEFAULT_PHYSICS_PROPERTIES_COMPONENT_NAME } from '../engine/components/PhysicsPropertiesComponent';
 import { PHYSICS_TO_VISUAL_SCALE, VectorOps, EARTH_RADIUS_METERS } from '../engine/PhysicsManager'; // Keep for physics scale if needed
 import { CityEntity } from '../engine/entities/CityEntity'; // Legacy
@@ -77,6 +81,9 @@ export class NewGlobeRenderer {
 
     private callbacks: NewGlobeRendererCallbacks;
     private currentGameState: GameState | null = null;
+    private clock: THREE.Clock; // Added clock for deltaTime
+
+    private particleManager!: ParticleManager; // Added ParticleManager instance
 
     private selectedHexId: string | null = null;
     private selectedEntityId: string | null = null;
@@ -97,8 +104,11 @@ export class NewGlobeRenderer {
         this.callbacks = callbacks;
 
         this.initializeMaterials(); // Initialize materials first
+        this.clock = new THREE.Clock(); // Initialize clock
 
         this.scene = new THREE.Scene();
+        this.particleManager = new ParticleManager(this.scene); // Initialize ParticleManager
+
         this.camera = new THREE.PerspectiveCamera(
             75,
             container.clientWidth / container.clientHeight,
@@ -125,6 +135,7 @@ export class NewGlobeRenderer {
 
         this.setupControls();
         this.setupEventListeners();
+        this.subscribeToEvents(); // Subscribe to relevant game events
 
         this.animate();
     }
@@ -1642,10 +1653,18 @@ export class NewGlobeRenderer {
 
     private animate = (): void => {
         this.animationId = requestAnimationFrame(this.animate);
+        const deltaTime = this.clock.getDelta();
 
         if (this.atmosphereMesh && (this.atmosphereMesh.material as THREE.ShaderMaterial).uniforms) {
             (this.atmosphereMesh.material as THREE.ShaderMaterial).uniforms.viewVector.value = this.camera.position;
         }
+
+        // Update clouds rotation
+        if (this.cloudsMesh) {
+            this.cloudsMesh.rotation.y += deltaTime * 0.005; // Slow rotation
+        }
+
+        this.particleManager.update(deltaTime); // Update particle systems
 
         this.renderer.render(this.scene, this.camera);
     };
@@ -1660,6 +1679,11 @@ export class NewGlobeRenderer {
         this.renderer.domElement.removeEventListener('mouseleave', this.onMouseUp);
         this.renderer.domElement.removeEventListener('wheel', this.onWheel);
         window.removeEventListener('resize', this.onWindowResize);
+
+        // Unsubscribe from events
+        // A more robust solution would be to store unsubscribe functions returned by eventBus.subscribe
+        // and call them individually. clearAllListeners is a blunt instrument.
+        EventBus.getInstance().clearAllListeners();
 
         this.entityVisuals.forEach((visual, id) => this.removeEntityVisual(id));
         this.entityVisuals.clear();
@@ -1718,11 +1742,87 @@ export class NewGlobeRenderer {
         });
         this.highlightVisuals.clear();
 
+        this.particleManager.dispose(); // Dispose particle manager
+
         this.renderer.dispose();
         if (this.renderer.domElement.parentElement) {
              this.renderer.domElement.parentElement.removeChild(this.renderer.domElement);
         }
         console.log("NewGlobeRenderer disposed.");
+    }
+
+    // Method to trigger particle effects
+    public displayParticleEffect(effectType: string, hexCellId: string, intensity?: number, duration?: number): void {
+        const cell = this.hexGridManager.getCellById(hexCellId);
+        if (!cell) {
+            console.warn(`[NewGlobeRenderer] Cannot display particle effect: HexCell ${hexCellId} not found.`);
+            return;
+        }
+
+        const position = cell.centerPointWorld.clone().normalize().multiplyScalar(VISUAL_EARTH_RADIUS + ENTITY_VISUAL_SCALE * 0.2); // Slightly above surface
+
+        let config: ParticleEmitterConfig | null = null;
+
+        // Define configurations for different effect types
+        if (effectType === 'riot') {
+            config = {
+                particleCount: intensity ? Math.floor(intensity * 500 + 200) : 300, // More particles for higher intensity
+                emissionRate: intensity ? Math.floor(intensity * 100 + 50) : 75,
+                particleMaxAge: intensity ? 1.5 + intensity * 1.0 : 2.0, // Shorter, more intense bursts for high intensity
+                particleSize: 0.03,
+                particleOpacity: 0.7,
+                particleColor: [new THREE.Color(0xff4500), new THREE.Color(0xffa500)], // Orange to reddish-orange
+                particleVelocity: new THREE.Vector3(0, 0.05 + (intensity || 0) * 0.05, 0), // Upward, stronger with intensity
+                particleVelocityRandomness: new THREE.Vector3(0.05, 0.05, 0.05),
+                particleAcceleration: new THREE.Vector3(0, 0.01, 0), // Slight upward acceleration
+                angularVelocityRange: [-Math.PI / 4, Math.PI / 4],
+                opacityOverLifetime: (ageRatio) => Math.max(0, 1 - ageRatio * 1.5), // Fade out faster
+                sizeOverLifetime: (ageRatio) => Math.max(0, 1 - ageRatio),
+                worldSpaceParticles: true, // Riots happen in world space
+            };
+        } else if (effectType === 'experiment_deploy') { // Example for another effect
+             config = {
+                particleCount: 200,
+                emissionRate: 100,
+                particleMaxAge: 1.5,
+                particleSize: 0.02,
+                particleOpacity: 0.8,
+                particleColor: new THREE.Color(0x00ffdd), // Cyan-ish
+                particleVelocity: new THREE.Vector3(0, 0.03, 0),
+                particleVelocityRandomness: new THREE.Vector3(0.04, 0.04, 0.04),
+                particleAcceleration: new THREE.Vector3(0, 0.02, 0),
+                opacityOverLifetime: (ageRatio) => 1 - ageRatio,
+                sizeOverLifetime: (ageRatio) => (1 - ageRatio) * (0.5 + Math.sin(ageRatio * Math.PI * 2) * 0.5), // Pulsing size
+                worldSpaceParticles: true,
+            };
+        }
+        // Add more effect types here as needed
+
+        if (config) {
+            this.particleManager.addEmitter(config, position, duration);
+            console.log(`[NewGlobeRenderer] Displaying '${effectType}' particle effect at Hex ${hexCellId}`);
+        } else {
+            console.warn(`[NewGlobeRenderer] Particle effect type '${effectType}' not defined.`);
+        }
+    }
+
+    private subscribeToEvents(): void {
+        const eventBus = EventBus.getInstance();
+        // Store the unsubscribe function if you need to unsubscribe specific listeners later.
+        // For this example, we'll rely on clearAllListeners in dispose for simplicity.
+        eventBus.subscribe<TriggerParticleEffectPayload>(
+            VisualEffectEvent.TRIGGER_PARTICLE_EFFECT,
+            (event) => {
+                if (event.payload) {
+                    this.displayParticleEffect(
+                        event.payload.effectType,
+                        event.payload.hexCellId,
+                        event.payload.intensity,
+                        event.payload.duration
+                    );
+                }
+            }
+        );
     }
 }
 
