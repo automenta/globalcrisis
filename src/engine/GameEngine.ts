@@ -113,7 +113,7 @@ export interface Technology extends Identifiable {
 
 // GAME STATE
 export interface GameState {
-  time: number; running: boolean; speed: number; mode: 'chaos' | 'peace' | 'neutral';
+  time: number; running: boolean; speed: number;
   entities: Map<string, IEntity>; factions: Map<string, Faction>;
   availableTechnologies: Map<string, Technology>;
   worldRegions: Map<string, WorldRegion>; biomes: Map<string, Biome>;
@@ -533,7 +533,7 @@ export class GameEngine {
 
   private createInitialGameState(): GameState {
     return {
-      time: 0, running: false, speed: 1, mode: 'neutral',
+      time: 0, running: false, speed: 1,
       entities: new Map<string, IEntity>(), factions: new Map<string, Faction>(),
       worldRegions: new Map<string, WorldRegion>(), biomes: new Map<string, Biome>(),
       resources: new Map<string, Resource>(), recipes: new Map<string, ProductionRecipe>(),
