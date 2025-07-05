@@ -156,6 +156,7 @@ import { WeatherManager } from './WeatherManager';
 import { DisasterManager } from './DisasterManager';
 import { TechManager } from './TechManager';
 import { TerritoryManager } from './TerritoryManager';
+import { GeoBiomeManager } from './GeoBiomeManager'; // Import GeoBiomeManager
 class PhysicsManager { constructor(private gs: GameState) {} public update(dt: number) { /* TODO: Implement physics updates for entities */ } }
 
 class EconomyManager {
@@ -204,7 +205,7 @@ class EconomyManager {
             if (entity.entityType === 'CityEntity') {
                 const popComp = entity.getComponent<IPopulationComponent>('PopulationComponent');
                 if (popComp) {
-                    const population = popComp.stats.total;
+                    const population = popComp.getTotalPopulation(); // Changed to use getTotalPopulation()
                     const foodDemand = population * 0.01;
                     globalDemand.set('food', (globalDemand.get('food') || 0) + foodDemand);
                 }
@@ -498,9 +499,12 @@ class FactionManager {
 import { FactoryEntity } from './entities/FactoryEntity';
 import { ScoutUnitEntity } from './entities/ScoutUnitEntity';
 import { SoundManager } from './SoundManager'; // Import SoundManager
+import { HexGridManager, HexCell } from './HexGridManager'; // Import HexGridManager
+import * as THREE from 'three'; // Required for HexGridManager interaction
 
 export class GameEngine {
   private gameState: GameState;
+  public hexGridManager: HexGridManager; // Make HexGridManager public or add a getter
   public entityManager: EntityManager;
   public physicsManager: PhysicsManager;
   public economyManager: EconomyManager;
@@ -514,9 +518,10 @@ export class GameEngine {
 
   private activeAmbientSounds: Set<string> = new Set(); // To track current global ambient sounds
 
-  constructor() {
+  constructor(earthRadius: number = 100, hexGridSubdivisions: number = 2) { // Added parameters for HexGridManager
     this.gameState = this.createInitialGameState();
     this.soundManager = new SoundManager(); // Initialize SoundManager
+    this.hexGridManager = new HexGridManager(earthRadius, hexGridSubdivisions); // Initialize HexGridManager
     this.entityManager = new EntityManager(this.gameState);
     this.physicsManager = new PhysicsManager(this.gameState);
     this.economyManager = new EconomyManager(this.gameState);
@@ -672,7 +677,7 @@ export class GameEngine {
         this.gameState.entities.forEach(entity => {
             if (entity.entityType === 'CityEntity' && entity.location.regionId === data.id) {
                 const popComp = entity.getComponent<IPopulationComponent>('PopulationComponent');
-                if (popComp) { regionPopulation += popComp.stats.total; }
+                if (popComp) { regionPopulation += popComp.getTotalPopulation(); } // Changed to use getTotalPopulation()
             }
         });
         data.population = Math.floor(regionPopulation);
@@ -771,7 +776,10 @@ export class GameEngine {
     let totalPopulation = 0;
     this.gameState.entities.forEach(entity => {
         if (entity.entityType === 'CityEntity' && entity.hasComponent('PopulationComponent')) {
-            totalPopulation += (entity.getComponent('PopulationComponent') as IPopulationComponent).stats.total;
+            const popComp = entity.getComponent<IPopulationComponent>('PopulationComponent');
+            if (popComp) {
+                totalPopulation += popComp.getTotalPopulation(); // Changed to use getTotalPopulation()
+            }
         }
     });
     this.gameState.globalPopulation = Math.floor(totalPopulation);
@@ -790,4 +798,41 @@ export class GameEngine {
   public setRunning(running: boolean): void { this.gameState.running = running; }
   public setSpeed(speed: number): void { this.gameState.speed = Math.max(0.1, speed); }
   public getGameState(): Readonly<GameState> { return this.gameState; }
+
+  // --- HexGridManager specific methods ---
+
+  /**
+   * Returns the HexGridManager instance.
+   * @returns The HexGridManager.
+   */
+  public getHexGridManager(): HexGridManager {
+    return this.hexGridManager;
+  }
+
+  /**
+   * Returns all hex cells from the HexGridManager.
+   * @returns A map of HexCell objects.
+   */
+  public getHexGridCells(): Map<string, HexCell> {
+    return this.hexGridManager.cells;
+  }
+
+  /**
+   * Finds the closest hex cell to a given world point.
+   * The world point should be a 3D vector on or near the surface of the sphere.
+   * @param worldPoint The THREE.Vector3 representing the point in world space.
+   * @returns The closest HexCell or null if not found.
+   */
+  public getCellForWorldPoint(worldPoint: THREE.Vector3): HexCell | null {
+    return this.hexGridManager.getCellForPoint(worldPoint);
+  }
+
+  /**
+   * Retrieves a specific hex cell by its ID.
+   * @param cellId The ID of the hex cell.
+   * @returns The HexCell or undefined if not found.
+   */
+  public getHexCellById(cellId: string): HexCell | undefined {
+    return this.hexGridManager.getCellById(cellId);
+  }
 }

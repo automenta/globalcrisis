@@ -1,9 +1,10 @@
-// src/engine/TechManager.ts
-import type { GameState, Faction, Technology, TechnologyEffect } from './GameEngine';
-import type { ProductionFacilityComponent } from './components/ProductionFacilityComponent';
+import type { GameState, Faction, Technology, TechnologyEffect, TechnologyId } from './GameEngine';
+import type { EventBus } from './EventBus';
+
+const BASE_RESEARCH_POINTS_PER_SECOND = 0.1;
 
 export class TechManager {
-  constructor(private gameState: GameState) {}
+  constructor(private gameState: Readonly<GameState>, private eventBus?: EventBus) {}
 
   public update(deltaTime: number): void {
     this.gameState.factions.forEach(faction => {
@@ -12,128 +13,108 @@ export class TechManager {
   }
 
   private updateFactionResearchProgress(faction: Faction, deltaTime: number): void {
-    if (!faction.researchRate || faction.researchRate <= 0) return;
-    if (!faction.currentResearchProjectId) return; // Not researching anything
+    if (!faction.currentResearchProjectId) return;
 
-    // Add research points
-    faction.researchPoints = (faction.researchPoints || 0) + faction.researchRate * deltaTime * this.gameState.speed;
+    const researchRateModifier = faction.researchRateModifier || 1.0;
+    const researchThisTick = BASE_RESEARCH_POINTS_PER_SECOND * researchRateModifier * deltaTime * this.gameState.gameSpeedMultiplier;
 
-    // Check if current research project is complete
-    const currentTech = this.gameState.availableTechnologies.get(faction.currentResearchProjectId);
-    if (currentTech && (faction.researchPoints || 0) >= currentTech.researchCost) {
+    faction.researchPoints = (faction.researchPoints || 0) + researchThisTick;
+
+    const currentTech = this.gameState.technologies.get(faction.currentResearchProjectId);
+    if (currentTech && faction.researchPoints >= currentTech.researchCost) {
       this.completeResearch(faction, currentTech);
-      // FactionManager will be responsible for picking a new tech if AI controlled
     }
   }
 
-  public canResearch(faction: Faction, techId: string): boolean {
-    const tech = this.gameState.availableTechnologies.get(techId);
-    if (!tech) return false; // Tech doesn't exist
-    if (faction.unlockedTechnologies?.includes(techId)) return false; // Already researched
+  public canResearch(faction: Faction, techId: TechnologyId): boolean {
+    const tech = this.gameState.technologies.get(techId);
+    if (!tech) return false;
+    if (faction.unlockedTechnologies.has(techId)) return false;
+    if (faction.currentResearchProjectId === techId) return false;
 
-    // Check prerequisites
     for (const prereqId of tech.prerequisites) {
-      if (!faction.unlockedTechnologies?.includes(prereqId)) {
-        return false; // Missing prerequisite
+      if (!faction.unlockedTechnologies.has(prereqId)) {
+        return false;
       }
     }
     return true;
   }
 
-  public startResearch(faction: Faction, techId: string): boolean {
+  public startResearch(faction: Faction, techId: TechnologyId): boolean {
     if (!this.canResearch(faction, techId)) {
-        // console.warn(`Faction ${faction.name} cannot start research on ${techId}. Prerequisites not met or already researched.`);
         return false;
     }
-    const tech = this.gameState.availableTechnologies.get(techId);
+    const tech = this.gameState.technologies.get(techId);
     if (!tech) return false;
 
     faction.currentResearchProjectId = techId;
-    faction.researchPoints = 0; // Reset points for the new project or carry over? For now, reset.
-    // console.log(`Faction ${faction.name} started research on ${tech.name}. Cost: ${tech.researchCost}`);
+    faction.researchPoints = 0;
+    // this.eventBus?.publish(TechEvent.RESEARCH_STARTED, { factionId: faction.id, techId });
     return true;
   }
 
   private completeResearch(faction: Faction, tech: Technology): void {
-    if (!faction.unlockedTechnologies) faction.unlockedTechnologies = [];
-
-    faction.unlockedTechnologies.push(tech.id);
+    faction.unlockedTechnologies.add(tech.id);
     faction.currentResearchProjectId = undefined;
-    // faction.researchPoints = 0; // Points spent, or keep surplus for next? For now, assume exact cost.
-    // Let's allow surplus to carry over by not resetting faction.researchPoints here after check.
-    // It's effectively reset/accounted for when starting a *new* project if we set it to 0 there.
-    // Or, more accurately, subtract the cost:
-    faction.researchPoints = (faction.researchPoints || 0) - tech.researchCost;
-
+    faction.researchPoints = Math.max(0, (faction.researchPoints || 0) - tech.researchCost);
 
     console.log(`Faction ${faction.name} completed research: ${tech.name}!`);
     this.applyTechEffects(faction, tech);
-
-    // AI Faction should pick a new research project.
-    // This logic could be in FactionManager or here. For now, FactionManager will handle it.
+    // this.eventBus?.publish(TechEvent.RESEARCH_COMPLETED, { factionId: faction.id, techId: tech.id });
   }
 
   public applyTechEffects(faction: Faction, tech: Technology): void {
+    if (!faction.techBonuses) {
+        faction.techBonuses = new Map<string, number>();
+    }
+
     tech.effects.forEach(effect => {
       switch (effect.type) {
-        case 'unlock_unit':
-          // Logic to make unit available for production by the faction
-          // For now, this is conceptual. FactionAI would check unlockedTechs.
-          console.log(`Tech Effect: ${faction.name} unlocked unit ${effect.unitId}`);
+        case 'unlock_recipe':
+        case 'unlock_entity_type':
+        case 'unlock_component':
+        case 'unlock_policy':
+          console.log(`Tech Effect: Faction ${faction.name} unlocked ${effect.type}: ${effect.targetId}`);
+          // this.eventBus?.publish(TechEvent.ITEM_UNLOCKED, { factionId: faction.id, itemType: effect.type, itemId: effect.targetId });
           break;
         case 'improve_production_efficiency':
-          // This effect needs to be applied to existing and future production facilities.
-          // One way: add a modifier to the faction or store in gameState,
-          // and ProductionFacilityComponent's getEfficiency reads it.
-          // For now, let's log it. A more robust solution would modify faction-wide stats or component behavior.
-          console.log(`Tech Effect: ${faction.name} efficiency bonus ${effect.bonus} for category ${effect.resourceCategory || effect.resourceId}`);
-          // Example of direct application (complex to maintain):
-          this.gameState.entities.forEach(entity => {
-            if (entity.factionId === faction.id && entity.hasComponent('ProductionFacilityComponent')) {
-              const prodComp = entity.getComponent<ProductionFacilityComponent>('ProductionFacilityComponent');
-              if (prodComp && prodComp.currentRecipe) { // currentRecipe might not be loaded yet
-                const recipe = this.gameState.recipes.get(prodComp.recipeId!);
-                if (recipe) {
-                    let applies = false;
-                    if (effect.resourceCategory === 'All') applies = true;
-                    else if (effect.resourceCategory && recipe.outputs.forEach((_, resId) => {
-                        const res = this.gameState.resources.get(resId);
-                        if (res && res.category === effect.resourceCategory) applies = true;
-                    }));
-                    else if (effect.resourceId && recipe.outputs.has(effect.resourceId)) applies = true;
-
-                    if (applies) {
-                        // This is a direct modification. Ideally, efficiency calculation in component reads from faction's tech bonuses.
-                        // prodComp.baseEfficiency += effect.bonus || 0; // This is problematic as it's permanent and stacks on load.
-                        // Instead, a faction-level map of bonuses is better.
-                         if (!faction.techBonuses) faction.techBonuses = new Map();
-                         const key = effect.resourceId ? `efficiency_${effect.resourceId}` : `efficiency_category_${effect.resourceCategory}`;
-                         faction.techBonuses.set(key, (faction.techBonuses.get(key) || 0) + (effect.bonus || 0));
-
-                    }
-                }
-              }
-            }
-          });
+          const prodKey = effect.targetId ? `prod_eff_${effect.targetId}` : `prod_eff_cat_general`;
+          const currentProdBonus = faction.techBonuses!.get(prodKey) || 0;
+          faction.techBonuses!.set(prodKey, currentProdBonus + (effect.bonusPercentage || 0));
+          console.log(`Tech Effect: Faction ${faction.name} improved production for ${prodKey} by ${effect.bonusPercentage}`);
           break;
         case 'improve_research_rate':
-          faction.researchRate = (faction.researchRate || 0) + (effect.bonus || 0);
-          console.log(`Tech Effect: ${faction.name} research rate increased by ${effect.bonus}. New rate: ${faction.researchRate}`);
+          faction.researchRateModifier = (faction.researchRateModifier || 1.0) * (1 + (effect.bonusPercentage || 0));
+          console.log(`Tech Effect: Faction ${faction.name} research rate modifier changed to ${faction.researchRateModifier}`);
           break;
-        // case 'modify_unit_stats':
-        //   // This would require iterating through all units of a type or applying a global modifier.
-        //   console.log(`Tech Effect: ${faction.name} unit ${effect.unitId} stats modified.`);
-        //   break;
+        case 'modify_entity_stats':
+        case 'modify_faction_attribute':
+            if (effect.type === 'modify_faction_attribute' && effect.statModifier && effect.targetId === faction.id) {
+                const { stat, amount, operation } = effect.statModifier;
+                let currentValue = (faction as any)[stat] || 0;
+                if (operation === 'add') (faction as any)[stat] = currentValue + amount;
+                else if (operation === 'multiply') (faction as any)[stat] = currentValue * amount;
+                else if (operation === 'set') (faction as any)[stat] = amount;
+                 console.log(`Tech Effect: Faction ${faction.id} attribute ${stat} changed to ${(faction as any)[stat]}`);
+            } else {
+                console.log(`Tech Effect: Faction ${faction.id} stat modification for ${effect.targetId} (details: ${effect.statModifier})`);
+            }
+            break;
+        case 'modify_biome_yield':
+             const biomeYieldKey = `biome_yield_${effect.targetId}_${effect.statModifier?.stat || 'general'}`;
+             const currentBiomeBonus = faction.techBonuses!.get(biomeYieldKey) || 0;
+             faction.techBonuses!.set(biomeYieldKey, currentBiomeBonus + (effect.bonusPercentage || 0));
+             console.log(`Tech Effect: Faction ${faction.id} modified biome yield for ${effect.targetId} by ${effect.bonusPercentage}`);
+            break;
+        case 'reduce_pollution':
+            const pollutionKey = `pollution_reduction_modifier`;
+            const currentPollutionBonus = faction.techBonuses!.get(pollutionKey) || 0;
+            faction.techBonuses!.set(pollutionKey, currentPollutionBonus + (effect.bonusPercentage || 0));
+            console.log(`Tech Effect: Faction ${faction.id} can reduce pollution by ${effect.bonusPercentage}`);
+            break;
         default:
-          console.warn(`Unknown tech effect type: ${effect.type}`);
+          console.warn(`Unknown tech effect type: ${(effect as any).type}`);
       }
     });
   }
-}
-
-// Add techBonuses to Faction interface if not implicitly handled by TS dynamic properties
-declare module './GameEngine' {
-    interface Faction {
-        techBonuses?: Map<string, number>; // e.g. "efficiency_food" -> 0.1
-    }
 }

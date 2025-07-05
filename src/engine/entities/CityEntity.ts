@@ -1,5 +1,5 @@
 import { BaseEntity, IEntity } from './BaseEntity';
-import { PopulationComponent, IPopulationComponent } from '../components/PopulationComponent';
+import { PopulationComponent, IPopulationComponent, PopulationSegment } from '../components/PopulationComponent'; // Added PopulationSegment
 import { ResourceStorageComponent, IResourceStorageComponent } from '../components/ResourceStorageComponent';
 import type { Location, GameState } from '../GameEngine';
 
@@ -30,7 +30,22 @@ export class CityEntity extends BaseEntity implements ICityEntity {
   ) {
     super(id, name, 'CityEntity', location, factionId);
 
-    this.populationComponent = new PopulationComponent(initialPopulation, initialMorale, initialHealthScore, initialUnrest);
+    // Create a default population segment
+    const defaultSegment: PopulationSegment = {
+      id: 'default_human', // Or generate a unique ID
+      name: 'Population',
+      totalPopulation: initialPopulation,
+      growthRate: 0.02, // Example: 2% annual growth rate (adjust as needed, component handles time scaling)
+      baseMorale: initialMorale,
+      healthScore: initialHealthScore,
+      baseUnrest: initialUnrest,
+      needs: new Map([
+        ['food', { currentFulfillment: 0.5 }], // Example: 50% food fulfillment initially
+        // Add other basic needs like housing, water etc.
+      ]),
+    };
+
+    this.populationComponent = new PopulationComponent([defaultSegment]);
     this.addComponent(this.populationComponent);
 
     this.resourceStorageComponent = new ResourceStorageComponent(initialResources);
