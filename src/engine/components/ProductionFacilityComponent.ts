@@ -8,7 +8,7 @@ export interface IProductionFacilityComponent extends IComponent {
   isActive: boolean;
   setRecipe(recipeId: string | undefined): void;
   toggleActive(active?: boolean): void;
-  getEfficiency(): number; // Placeholder for future factors like tech, morale, pollution
+  getEfficiency(gameState: GameState): number; // Pass GameState to access weather
 }
 
 export class ProductionFacilityComponent extends BaseComponent implements IProductionFacilityComponent {
@@ -17,13 +17,13 @@ export class ProductionFacilityComponent extends BaseComponent implements IProdu
   public productionProgress: number;
   public isActive: boolean;
   private currentRecipe?: ProductionRecipe;
-  private efficiency: number; // Base efficiency 0.0 to 1.0+
+  private baseEfficiency: number; // Renamed from efficiency to baseEfficiency
 
-  constructor(recipeId?: string, isActive: boolean = true, efficiency: number = 1.0) {
+  constructor(recipeId?: string, isActive: boolean = true, baseEfficiency: number = 1.0) {
     super();
     this.productionProgress = 0;
     this.isActive = isActive;
-    this.efficiency = efficiency;
+    this.baseEfficiency = baseEfficiency; // Store the base efficiency
     // Note: The actual recipe object is fetched from GameState in the update or setRecipe
     // to avoid stale data if recipes are dynamic.
     if (recipeId) {
@@ -65,9 +65,58 @@ export class ProductionFacilityComponent extends BaseComponent implements IProdu
     }
   }
 
-  public getEfficiency(): number {
-      // TODO: Implement dynamic efficiency based on tech, morale, pollution, etc.
-      return this.efficiency;
+  public getEfficiency(gameState: GameState): number {
+    let finalEfficiency = this.baseEfficiency;
+    const entity = gameState.entities.get(this.entityId);
+
+    if (!entity) return this.baseEfficiency; // Should not happen
+
+    // Apply weather effects
+    if (entity.location.biomeId) {
+      const biome = gameState.biomes.get(entity.location.biomeId);
+      if (biome && biome.currentWeather && this.currentRecipe) {
+        const isFoodProduction = this.currentRecipe.outputs.has('food');
+        if (isFoodProduction) {
+          const { temperature, precipitation, description } = biome.currentWeather;
+          if (temperature < 5 || temperature > 30) finalEfficiency *= 0.5;
+          if (precipitation > 2 || (precipitation < 0.1 && precipitation > 0)) finalEfficiency *= 0.7; // Simplified
+          if (description === "Drought" || description === "Freezing") finalEfficiency *= 0.3;
+        }
+        // TODO: Add other weather effects (e.g., wind for wind turbines, solar for solar panels)
+      }
+    }
+
+    // Apply faction technology bonuses
+    if (entity.factionId && this.currentRecipe) {
+        const faction = gameState.factions.get(entity.factionId);
+        if (faction && faction.techBonuses) {
+            // Check for specific resource output bonus
+            this.currentRecipe.outputs.forEach((_, resourceId) => {
+                const key = `efficiency_${resourceId}`;
+                if (faction.techBonuses!.has(key)) {
+                    finalEfficiency += faction.techBonuses!.get(key)!;
+                }
+            });
+            // Check for category bonus
+            this.currentRecipe.outputs.forEach((_, resourceId) => {
+                const resource = gameState.resources.get(resourceId);
+                if (resource) {
+                    const catKey = `efficiency_category_${resource.category}`;
+                    if (faction.techBonuses!.has(catKey)) {
+                        finalEfficiency += faction.techBonuses!.get(catKey)!;
+                    }
+                }
+            });
+             // Check for 'All' category bonus
+            const allKey = 'efficiency_category_All';
+            if (faction.techBonuses!.has(allKey)) {
+                finalEfficiency += faction.techBonuses!.get(allKey)!;
+            }
+        }
+    }
+
+    // TODO: Add other factors like local morale (from city if factory is in one), pollution, etc.
+    return Math.max(0, Math.min(finalEfficiency, 3)); // Cap efficiency (e.g., 0% to 300%)
   }
 
   public update(gameState: GameState, deltaTime: number): void {
@@ -120,7 +169,7 @@ export class ProductionFacilityComponent extends BaseComponent implements IProdu
     // deltaTime is in seconds. recipe.duration is in abstract time units.
     // Assume 1 recipe duration unit = 1 second of game time for now.
     // Efficiency scales the effective deltaTime.
-    this.productionProgress += (deltaTime * gameState.speed * this.getEfficiency());
+    this.productionProgress += (deltaTime * gameState.speed * this.getEfficiency(gameState));
 
     if (this.productionProgress >= this.currentRecipe.duration) {
       // Produce outputs

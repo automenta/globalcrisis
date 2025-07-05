@@ -19,12 +19,14 @@ export class ScoutUnitEntity extends BaseEntity implements IScoutUnitEntity {
     name: string,
     location: Location,
     factionId?: string,
-    speed: number = 0.5, // Default speed, e.g., world units per second
-    maxHp: number = 50
+    speed: number = 0.5, // Default speed
+    maxHp: number = 50,
+    perceptionRadius: number = 0.15, // Scouts are more aware
+    avoidanceStrength: number = 0.1 // Scouts are agile
   ) {
     super(id, name, 'ScoutUnitEntity', location, factionId);
 
-    this.movableComponent = new SimpleMovableComponent(speed);
+    this.movableComponent = new SimpleMovableComponent(speed, perceptionRadius, avoidanceStrength);
     this.addComponent(this.movableComponent);
 
     this.healthComponent = new HealthComponent(maxHp);
