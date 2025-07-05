@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { GameEngine, GameState, EventType, WorldRegion, RegionEvent, Faction } from './engine/GameEngine';
-// import { Earth3D, Satellite, ContextMenu as ContextMenuType } from './components/Earth3D'; // Old import
-import { Earth3D_v2, ContextMenu as ContextMenuType } from './components/Earth3D.2'; // New import
+import { Earth3D, ContextMenu as ContextMenuType } from './components/Earth3D'; // Changed import to Earth3D from Earth3D.ts
 import { ContextMenu, TacticalOverlay } from './components/WarRoomUI';
 import { Button } from '@/components/ui/button';
 import { AlertTriangle, Power } from 'lucide-react';
@@ -70,7 +69,7 @@ class WarRoomAudio {
 }
 
 export default function GlobalCrisisSimulator() {
-  const earth3DRef = useRef<Earth3D_v2 | null>(null); // Updated type
+  const earth3DRef = useRef<Earth3D | null>(null); // Changed to Earth3D
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const gameEngineRef = useRef<GameEngine | null>(null);
   const audioRef = useRef<WarRoomAudio | null>(null);
@@ -96,12 +95,14 @@ export default function GlobalCrisisSimulator() {
     
     try {
       // Initialize game engine
-      gameEngineRef.current = new GameEngine();
-      const initialState = gameEngineRef.current.createInitialWorld();
-      setGameState(initialState);
+      console.log("Attempting to initialize GameEngine...");
+      const engine = new GameEngine(); // Uses default earthRadius & subdivisions
+      gameEngineRef.current = engine;
+      setGameState(engine.getGameState()); // Get initial state from the engine
+      console.log("GameEngine initialized, initial state set:", engine.getGameState());
       
       // Initialize 3D Earth
-      earth3DRef.current = new Earth3D_v2(canvasContainerRef.current); // Use Earth3D_v2
+      earth3DRef.current = new Earth3D(canvasContainerRef.current); // Changed to Earth3D
       
       // Initialize audio
       audioRef.current = new WarRoomAudio();
@@ -162,8 +163,9 @@ export default function GlobalCrisisSimulator() {
       const deltaTime = currentTime - lastTime;
       lastTime = currentTime;
       
-      if (gameEngineRef.current) {
-        const newState = gameEngineRef.current.updateWorld(gameState, deltaTime); // gameState should be the first arg
+      if (gameEngineRef.current && gameState) { // Ensure gameState is not null
+        // console.log(`Game loop: deltaTime = ${deltaTime.toFixed(2)}ms, current engine time = ${gameState.time.toFixed(2)}`);
+        const newState = gameEngineRef.current.updateWorld(deltaTime / 1000); // Pass deltaTime in seconds
         setGameState(newState);
         
         // Update 3D visualization
@@ -286,14 +288,21 @@ export default function GlobalCrisisSimulator() {
   }, [gameState]);
   
   const handleSpeedChange = useCallback((speed: number) => {
-    if (!gameState) return;
-    setGameState({ ...gameState, speed });
+    if (!gameState || !gameEngineRef.current) return;
+    gameEngineRef.current.setSpeed(speed); // Update engine's internal speed
+    setGameState(prevState => ({ ...prevState!, speed }));
   }, [gameState]);
   
   const handleTogglePlay = useCallback(() => {
-    if (!gameState) return;
+    if (!gameState || !gameEngineRef.current) return; // Ensure gameEngineRef is also available
     const newRunning = !gameState.running;
-    setGameState({ ...gameState, running: newRunning });
+
+    // Update the GameEngine's internal running state
+    gameEngineRef.current.setRunning(newRunning);
+
+    // Update React's view of the game state (which includes the running flag)
+    // This will also trigger the useEffect for the game loop if newRunning is true.
+    setGameState(prevState => ({ ...prevState!, running: newRunning }));
     
     if (newRunning) {
       audioRef.current?.playAmbient();

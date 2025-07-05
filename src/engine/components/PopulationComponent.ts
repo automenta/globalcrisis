@@ -1,10 +1,30 @@
 import { BaseComponent, IComponent } from './BaseComponent';
-import type { GameState, PopulationSegment } from '../GameEngine'; // Changed PopulationStats to PopulationSegment
+// import type { GameState, PopulationSegment } from '../GameEngine'; // Problematic import, PopulationSegment not found there
+import type { GameState } from '../GameEngine'; // Keep GameState import
 import type { IResourceStorageComponent } from "./ResourceStorageComponent";
 
+// Define PopulationSegment here as it's not found elsewhere
+// This is a placeholder structure based on usage in this file.
+export interface PopulationSegment {
+  id: string; // Unique ID for this segment (e.g., 'human_adults', 'robots')
+  name: string; // Display name (e.g., "Human Adults", "Worker Drones")
+  totalPopulation: number;
+  growthRate: number; // Base growth rate (e.g., per year, per day - component converts to per second)
+  baseMorale: number; // 0-100
+  healthScore: number; // 0-100
+  baseUnrest: number; // 0-100, affects morale and events
+  // Define needs as a map where key is resourceId/needId and value is details about the need
+  needs: Map<string, {
+    // perCapitaNeed: number; // Amount of resource needed per individual per unit of time
+    // priority: number; // How critical this need is
+    currentFulfillment: number; // 0-1, how well this need is currently being met
+  }>;
+  // Other segment-specific properties like age distribution, skills, etc. could be added
+}
+
+
 export interface IPopulationComponent extends IComponent {
-  // stats: PopulationStats; // Old
-  segments: Map<string, PopulationSegment>; // New: Can have multiple segments (e.g. different demographics, species)
+  segments: Map<string, PopulationSegment>;
   addSegment(segment: PopulationSegment): void;
   getSegment(segmentId: string): PopulationSegment | undefined;
   getTotalPopulation(): number;
