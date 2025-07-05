@@ -1,57 +1,64 @@
-import type { GameState, Location, Identifiable, EntityId, FactionId, ComponentType } from '../GameEngine';
-import type { IComponent } from '../components/BaseComponent';
+import type {
+    GameState,
+    EntityLocation,
+    IEntity as ISilentHelixEntity, // Use the new IEntity from GameEngine.ts
+    MetamodelType
+} from '../GameEngine';
+import type { IComponent as ILegacyComponent } from '../components/BaseComponent'; // Legacy component system
 
-export interface IEntity extends Identifiable {
-  id: EntityId;
-  entityType: string;
-  factionId?: FactionId;
-  location: Location;
-  components: Map<ComponentType, IComponent>;
+// Note: The new ISilentHelixEntity interface is simpler and doesn't mandate a component system.
+// This BaseEntity will adapt to ISilentHelixEntity while retaining component logic for potential reuse or gradual refactoring.
 
-  update(gameState: Readonly<GameState>, deltaTime: number): void;
-  addComponent(component: IComponent): void;
-  getComponent<T extends IComponent>(componentType: ComponentType): T | undefined;
-  removeComponent(componentType: ComponentType): boolean;
-  hasComponent(componentType: ComponentType): boolean;
-  onAddedToGame?(gameState: Readonly<GameState>): void;
-  onRemovedFromGame?(gameState: Readonly<GameState>): void;
-  handleEvent?(eventName: string, data?: any): void;
-}
+export abstract class BaseEntity implements ISilentHelixEntity {
+  public readonly id: string;
+  public readonly type: MetamodelType; // Corresponds to entityType in ISilentHelixEntity
+  public name?: string;
+  public description?: string;
+  public factionId?: string;
+  public location: EntityLocation;
 
+  // Retain component system for now, for any existing components that might be useful.
+  // This part is from the old IEntity/BaseEntity.
+  public components: Map<string, ILegacyComponent>;
 
-export abstract class BaseEntity implements IEntity {
-  public readonly id: EntityId;
-  public name: string;
-  public readonly entityType: string;
-  public factionId?: FactionId;
-  public location: Location;
-  public components: Map<ComponentType, IComponent>;
-
-  constructor(id: EntityId, name: string, entityType: string, initialLocation: Location, factionId?: FactionId) {
+  constructor(
+    id: string,
+    type: MetamodelType,
+    initialLocation: EntityLocation,
+    name?: string,
+    factionId?: string,
+    description?: string,
+  ) {
     this.id = id;
+    this.type = type;
     this.name = name;
-    this.entityType = entityType;
     this.location = initialLocation;
     this.factionId = factionId;
-    this.components = new Map<ComponentType, IComponent>();
+    this.description = description;
+    this.components = new Map<string, ILegacyComponent>();
   }
 
-  public addComponent(component: IComponent): void {
+  // Methods from ISilentHelixEntity (id, type, name, factionId, location are properties)
+  // update method is optional in ISilentHelixEntity and should be implemented by subclasses if needed.
+  public abstract update?(gameState: Readonly<GameState>, deltaTime: number): void;
+
+  // Component management methods (legacy, but kept for now)
+  public addComponent(component: ILegacyComponent): void {
     if (component.entityId && component.entityId !== this.id) {
       console.warn(`Component ${component.type} is being reassigned from entity ${component.entityId} to ${this.id}. This might indicate an issue.`);
     }
-    component.entityId = this.id;
+    component.entityId = this.id; // Assuming ILegacyComponent has entityId and type
     this.components.set(component.type, component);
     if (component.onAddedToEntity) {
       component.onAddedToEntity();
     }
   }
 
-  public getComponent<T extends IComponent>(componentType: ComponentType): T | undefined {
+  public getComponent<T extends ILegacyComponent>(componentType: string): T | undefined {
     return this.components.get(componentType) as T | undefined;
   }
 
-  public removeComponent(componentType: ComponentType): boolean {
+  public removeComponent(componentType: string): boolean {
     const component = this.components.get(componentType);
     if (component) {
       if (component.onRemovedFromEntity) {
@@ -62,17 +69,14 @@ export abstract class BaseEntity implements IEntity {
     return false;
   }
 
-  public hasComponent(componentType: ComponentType): boolean {
+  public hasComponent(componentType: string): boolean {
     return this.components.has(componentType);
   }
 
-  public update(gameState: Readonly<GameState>, deltaTime: number): void {
-    for (const component of this.components.values()) {
-      component.update(gameState, deltaTime);
-    }
-  }
-
+  // Optional lifecycle methods (can be part of ISilentHelixEntity or specific entity types)
   public onAddedToGame?(gameState: Readonly<GameState>): void;
   public onRemovedFromGame?(gameState: Readonly<GameState>): void;
+
+  // Event handling (can be part of ISilentHelixEntity or specific entity types)
   public handleEvent?(eventName: string, data?: any): void;
 }

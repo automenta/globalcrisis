@@ -1,838 +1,852 @@
-// Content for the new GameEngine.ts
-import type { IEntity } from './entities/BaseEntity';
-import type { IComponent } from './components/BaseComponent';
-import { CityEntity } from './entities/CityEntity'; // Import CityEntity
-import type { IResourceStorageComponent } from './components/ResourceStorageComponent';
-import type { IProductionFacilityComponent } from './components/ProductionFacilityComponent';
-import type { IPopulationComponent } from './components/PopulationComponent';
-import type { ITradeHubComponent } from './components/TradeHubComponent';
-import { InfantryUnitEntity } from './entities/InfantryUnitEntity';
-import { CombatStats } from './components/CombatComponent';
+// Silent Helix Game Engine Core
+import type { IEntity as ILegacyEntity } from './entities/BaseEntity'; // Renamed to avoid conflict
+import type { IComponent as ILegacyComponent } from './components/BaseComponent'; // Renamed
+import {
+    ScientistEntity,
+    DroneEntity,
+    MediaOutletEntity,
+    HospitalEntity,
+    // WhistleblowerEntity // Not spawning Whistleblowers initially by default
+} from './entities';
+
 
 // Base Interfaces
-interface Identifiable { id: string; name: string; }
+interface Identifiable { id: string; } // Name might be part of specific entity types or configs
 
-// PHYSICS SYSTEM
-export enum PhysicsLayer { Underground, Surface, Air, Orbit, Moon }
-export interface Location {
-  layer: PhysicsLayer;
-  coordinates: { x: number, y: number, z?: number };
-  regionId?: string;
-  biomeId?: string;
-}
+// METAMODEL CORE STRUCTURES
 
-// POPULATION & GEO-BIOME
-export interface Biome extends Identifiable {
-  climateProfile: {
-    averageTemperature: number; // Celsius
-    averagePrecipitation: number; // mm per year
-    temperatureVariance: number; // +/- degrees Celsius
-    precipitationVariance: number; // +/- percentage of average
-  };
-  terrainProperties: { arableLandPercentage: number; movementModifier: number; };
-  naturalResources: Map<string, number>;
-  currentWeather?: WeatherCondition;
-  controllingFactionId?: string;
-  factionInfluence?: Map<string, number>;
+/**
+ * Represents the type of an entity, action, or phenomenon.
+ * Used for dynamic instantiation and configuration.
+ */
+export type MetamodelType = string;
+
+/**
+ * Base for all dynamic elements in the simulation (Entities, Actions, Phenomena).
+ */
+export interface MetamodelElement {
+  id: string;
+  type: MetamodelType; // e.g., "scientist", "deployExperiment", "mrnaTransfectionEffect"
+  name?: string; // Optional display name
+  description?: string; // Optional description
 }
 
-export interface WeatherCondition {
-  temperature: number;
-  precipitation: number;
-  windSpeed: number;
-  description: string;
-}
-export interface PopulationStats {
-  total: number;
-  growthRate: number;
-  morale: number;
-  healthScore: number;
-  unrest: number;
-}
-
-// PRODUCTION/CONSUMPTION
-export interface Resource extends Identifiable {
-  category: 'Raw' | 'Processed' | 'FinishedGood' | 'Energy';
-  baseValue: number;
-  currentPrice?: number;
-}
-export interface ProductionRecipe extends Identifiable {
-  inputs: Map<string, number>; outputs: Map<string, number>;
-  duration: number; energyCost: number;
+// 1. ENTITIES (Metamodel Component)
+// BaseEntity in './entities/BaseEntity.ts' will be refactored to implement this.
+// The old IEntity is now ILegacyEntity.
+export interface IEntity extends MetamodelElement {
+  location: EntityLocation;
+  factionId?: string; // Allegiance (e.g., player consortium, rogue elements)
+  // Entity-specific properties and methods will be in their classes.
+  // Components can be used for shared behaviors if desired, but the primary
+  // structure follows the Metamodel: Entity, Action, Phenomenon.
+  getComponent?<T extends ILegacyComponent>(componentName: string): T | undefined; // Keep for potential reuse of old components
+  hasComponent?(componentName: string): boolean; // Keep for potential reuse
+  // update method will be specific to each entity type, if needed, or handled by systems.
+  update?(gameState: GameState, deltaTime: number): void;
 }
 
-// LEGACY WorldRegion
-export interface WorldRegion extends Identifiable {
-  population: number; health: number; environment: number; stability: number;
-  rareEarthElements: number; foodSupply: number; technologyLevel: number; infrastructureQuality: number;
-  x: number; y: number; color: [number, number, number];
+export enum EntityLocationType {
+  HexTile = "HexTile",
+  Global = "Global",
 }
 
-// FACTIONS & IDEOLOGY
-export enum Ideology { DEMOCRATIC = 'Democratic', COMMUNIST = 'Communist', AUTHORITARIAN = 'Authoritarian', CORPORATIST = 'Corporatist', ENVIRONMENTALIST = 'Environmentalist', TECHNOCRATIC = 'Technocratic' }
-export enum FactionGoal { EconomicGrowth, MilitaryExpansion, TechnologicalSupremacy, CulturalDominance, Survival }
-export interface FactionStrategy {
-    primaryGoal: FactionGoal;
-    targetFaction?: string;
-    expansionTargetBiome?: string;
-    desiredTech?: string;
+export interface EntityLocation {
+  type: EntityLocationType;
+  hexCellId?: string;
 }
 
-export interface Faction extends Identifiable {
-  ideology: Ideology; powerLevel: number; influence: Map<string, number>;
-  relations: Map<string, number>; headquartersRegionId?: string;
-  balance?: number;
-  currentStrategy?: FactionStrategy;
-  aiState?: {
-    lastDecisionTime: number;
-    decisionInterval: number;
-  };
+// 2. ACTIONS (Metamodel Component)
+export interface IAction extends MetamodelElement {
+  trigger: ActionTrigger;
+  target: ActionTarget;
+  parameters?: Record<string, any>;
+}
+
+export type ActionTrigger = 'player_initiated' | 'ai_initiated' | 'event_driven';
+export type ActionTargetType = 'hex_tile' | 'entity' | 'global';
+export interface ActionTarget {
+  type: ActionTargetType;
+  targetId?: string;
+}
+
+// 3. PHENOMENA (Metamodel Component)
+export interface IPhenomenon extends MetamodelElement {
+  scope: PhenomenonScope;
+  trigger: PhenomenonTrigger;
+  startTime?: number; // Game time when phenomenon started
+  duration?: number; // How long it lasts, if applicable
+  isActive?: boolean; // If the phenomenon is currently active
+}
+
+export type PhenomenonScope = 'hex_tile' | 'region_group' | 'global';
+export type PhenomenonTriggerType = 'probabilistic' | 'conditional' | 'continuous';
+export interface PhenomenonTrigger {
+  type: PhenomenonTriggerType;
+  chance?: number;
+  condition?: string; // e.g., "trust < 0.3" - needs parsing logic
+  interval?: number;
+}
+
+
+// 4. ENVIRONMENT (Metamodel Component)
+// Hexagonal Tiles are the core of the environment.
+export interface HexTileProperties {
+  population: number;
+  trust: number; // 0-1
+  suspicion: number; // 0-1
+  health: number; // 0-1 (average population health)
+  infrastructure: number; // 0-1
+  fertility: number; // 0-1
+  // Color pulsing will be handled by the renderer based on trust/suspicion.
+}
+
+
+// FACTIONS (Simplified for Silent Helix: Player Consortium vs. World/Rogue Elements)
+export interface SHFaction extends Identifiable {
+  name: string;
+  isPlayer: boolean;
+  color?: string;
   researchPoints?: number;
-  researchRate?: number;
-  unlockedTechnologies?: string[];
-  currentResearchProjectId?: string;
-  techBonuses?: Map<string, number>;
+  // Other global player/faction resources like 'exposure_level' or 'funding' can be added.
 }
 
-// TECHNOLOGIES
-export interface TechnologyEffect {
-  type: 'unlock_unit' | 'unlock_building' | 'improve_production_efficiency' | 'improve_research_rate' | 'modify_unit_stats';
-  unitId?: string;
-  buildingId?: string;
-  resourceCategory?: 'Raw' | 'Processed' | 'FinishedGood' | 'Energy' | 'All';
-  resourceId?: string; // Added for specific resource efficiency
-  statModifier?: { stat: string, amount: number, isPercentage?: boolean };
-  bonus?: number;
-}
-export interface Technology extends Identifiable {
+
+// TECHNOLOGIES (Silent Helix Specific)
+export interface SHTechnology extends Identifiable {
+  name: string;
   description: string;
   researchCost: number;
   prerequisites: string[];
-  effects: TechnologyEffect[];
+  effects: SHTechnologyEffect[];
 }
+
+export interface SHTechnologyEffect {
+  type: 'unlock_action' | 'unlock_entity_upgrade' | 'modify_phenomenon_risk' | 'improve_efficiency' | 'modify_global_variable';
+  actionId?: string;
+  entityType?: MetamodelType;
+  phenomenonType?: MetamodelType;
+  parameter?: string;
+  modifier?: number | string | boolean; // Numerical change, new value, or flag
+  description: string;
+}
+
 
 // GAME STATE
 export interface GameState {
-  time: number; running: boolean; speed: number;
-  entities: Map<string, IEntity>; factions: Map<string, Faction>;
-  availableTechnologies: Map<string, Technology>;
-  worldRegions: Map<string, WorldRegion>; biomes: Map<string, Biome>;
-  resources: Map<string, Resource>; recipes: Map<string, ProductionRecipe>;
-  globalPopulation: number; globalHealth: number; globalEnvironment: number;
-  globalStability: number; globalSuffering: number; globalEconomicProsperity: number;
-  activeDisasters: NaturalDisaster[];
-}
+  time: number;
+  running: boolean;
+  speed: number;
 
-// NATURAL DISASTERS
-export enum DisasterType { Earthquake, Storm, Drought, Flood, Wildfire } // Added Wildfire
-export interface NaturalDisasterEffect {
-  type: 'damage_entities' | 'reduce_population' | 'modify_biome_resources' | 'change_terrain';
-  magnitude: number; // General magnitude. For damage, it's points. For pop reduction, percentage. For resource mod, amount or multiplier.
-  resourceId?: string; // e.g., 'wood', 'food'
-  affectedEntityType?: string; // e.g., 'CityEntity', 'FactoryEntity'
-  durationOfEffect?: number; // For effects that last longer than the disaster itself or DOTs
-}
-export interface NaturalDisaster extends Identifiable {
-  type: DisasterType;
-  location: Location;
-  radius: number;
-  startTime: number;
-  duration: number;
-  effects: NaturalDisasterEffect[];
-  isActive: boolean;
-  description: string;
+  entities: Map<string, IEntity>; // All active Silent Helix entities
+  factions: Map<string, SHFaction>;
+
+  pendingActions: IAction[];
+  activePhenomena: IPhenomenon[];
+
+  availableTechnologies: Map<string, SHTechnology>;
+  unlockedTechnologies: Set<string>;
+
+  globalTrust: number;
+  globalSuspicion: number;
+  globalPopulation: number;
+
+  // Other global metrics specific to Silent Helix
+  globalPlayerExposure: number; // 0-1, how close player is to being discovered
+  globalResearchProgress?: { currentTechId?: string, pointsAccumulated: number };
+
+
+  settings: {
+    baseSuspicionDecayRate: number;
+    baseTrustDecayRate: number;
+    // Equations from design doc:
+    // dH/dt = -k1*Dose + k2*Placebo - k3*SideEffects.  (Will be implemented per-tile based on experiments)
+    // dS/dt = k4*SideEffects + k5*Leaks - k6*Propaganda. (Will be implemented per-tile/globally)
+  };
 }
 
 // MANAGERS
 class EntityManager {
   constructor(private gameState: GameState) {}
-  addEntity(entity: IEntity): void { this.gameState.entities.set(entity.id, entity); if (entity.init) entity.init(); }
+  addEntity(entity: IEntity): void {
+    this.gameState.entities.set(entity.id, entity);
+  }
   removeEntity(entityId: string): void { this.gameState.entities.delete(entityId); }
   getEntity(entityId: string): IEntity | undefined { return this.gameState.entities.get(entityId); }
-  updateAll(deltaTime: number): void { this.gameState.entities.forEach(e => e.update(this.gameState, deltaTime)); }
+
+  updateAllEntities(deltaTime: number): void {
+    this.gameState.entities.forEach(entity => {
+      if (entity.update) {
+          entity.update(this.gameState, deltaTime);
+      }
+    });
+  }
 }
 
-import { WeatherManager } from './WeatherManager';
-import { DisasterManager } from './DisasterManager';
-import { TechManager } from './TechManager';
-import { TerritoryManager } from './TerritoryManager';
-import { GeoBiomeManager } from './GeoBiomeManager'; // Import GeoBiomeManager
-class PhysicsManager { constructor(private gs: GameState) {} public update(dt: number) { /* TODO: Implement physics updates for entities */ } }
+// PhysicsManager might be simplified if complex physics aren't core to Silent Helix.
+// Movement will be primarily grid-based (A* on hex grid).
+class PhysicsManager {
+  constructor(private gs: GameState) {}
+  public update(dt: number) { /* TODO: Implement A* pathfinding requests or simple movement updates */ }
+}
 
-class EconomyManager {
-    private lastPriceUpdate: number = 0;
-    private priceUpdateInterval: number = 100;
+class ActionManager {
+    constructor(private gameState: GameState, private engine: GameEngine) {}
 
-    constructor(private gameState: GameState) {}
-
-    public update(deltaTime: number): void {
-        this.lastPriceUpdate += deltaTime * this.gameState.speed;
-        if (this.lastPriceUpdate >= this.priceUpdateInterval) {
-            this.updateResourcePrices();
-            this.lastPriceUpdate = 0;
+    processPendingActions(): void {
+        const processedActions: IAction[] = [];
+        for (const action of this.gameState.pendingActions) {
+            this.executeAction(action);
+            processedActions.push(action);
         }
+        this.gameState.pendingActions = this.gameState.pendingActions.filter(a => !processedActions.includes(a));
     }
 
-    private updateResourcePrices(): void {
-        const globalSupply = new Map<string, number>();
-        const globalDemand = new Map<string, number>();
+    private executeAction(action: IAction): void {
+        console.log(`Executing action: ${action.type} (ID: ${action.id}), Target: ${action.target.targetId || 'Global'}, Params:`, action.parameters);
 
-        this.gameState.entities.forEach(entity => {
-            const storage = entity.getComponent<IResourceStorageComponent>('ResourceStorageComponent');
-            if (storage) {
-                storage.resources.forEach((amount, resourceId) => {
-                    globalSupply.set(resourceId, (globalSupply.get(resourceId) || 0) + amount);
-                });
-            }
-        });
-
-        this.gameState.entities.forEach(entity => {
-            if (entity.entityType === 'FactoryEntity') {
-                const prodFacility = entity.getComponent<IProductionFacilityComponent>('ProductionFacilityComponent');
-                if (prodFacility && prodFacility.isActive && prodFacility.recipeId) {
-                    const recipe = this.gameState.recipes.get(prodFacility.recipeId);
-                    if (recipe) {
-                        recipe.inputs.forEach((amount, resourceId) => {
-                            const demandPerSecond = amount / recipe.duration;
-                            globalDemand.set(resourceId, (globalDemand.get(resourceId) || 0) + demandPerSecond * this.priceUpdateInterval);
-                        });
-                    }
-                }
-            }
-        });
-
-        this.gameState.entities.forEach(entity => {
-            if (entity.entityType === 'CityEntity') {
-                const popComp = entity.getComponent<IPopulationComponent>('PopulationComponent');
-                if (popComp) {
-                    const population = popComp.getTotalPopulation(); // Changed to use getTotalPopulation()
-                    const foodDemand = population * 0.01;
-                    globalDemand.set('food', (globalDemand.get('food') || 0) + foodDemand);
-                }
-            }
-        });
-
-        this.gameState.resources.forEach(resource => {
-            const supply = globalSupply.get(resource.id) || 1;
-            const demand = globalDemand.get(resource.id) || resource.baseValue * 0.1;
-            let priceMultiplier = demand / Math.max(1, supply);
-            priceMultiplier = Math.max(0.1, Math.min(priceMultiplier, 10));
-            resource.currentPrice = parseFloat((resource.baseValue * priceMultiplier).toFixed(2));
-        });
-        this.facilitateTrades();
-    }
-
-    private facilitateTrades(): void {
-        const tradeHubs: ITradeHubComponent[] = [];
-        this.gameState.entities.forEach(entity => {
-            const hub = entity.getComponent<ITradeHubComponent>('TradeHubComponent');
-            if (hub) {
-                tradeHubs.push(hub);
-            }
-        });
-
-        if (tradeHubs.length < 2) return;
-
-        tradeHubs.forEach(importerHub => {
-            const importerEntity = this.gameState.entities.get(importerHub.entityId);
-            if (!importerEntity) return;
-
-            importerHub.activeImportRequests.forEach((importRequest, resourceId) => {
-                if (importRequest.amount <= 0) return;
-
-                for (const exporterHub of tradeHubs) {
-                    if (importerHub.entityId === exporterHub.entityId) continue;
-                    const exporterEntity = this.gameState.entities.get(exporterHub.entityId);
-                    if (!exporterEntity) continue;
-
-                    const exportOffer = exporterHub.activeExportOffers.get(resourceId);
-                    if (exportOffer && exportOffer.amount > 0 && exportOffer.pricePerUnit <= importRequest.pricePerUnit) {
-                        if (importerHub.processTrade(this.gameState, exporterHub, exportOffer)) {
-                            if (importRequest.amount <= 0 || importerHub.activeImportRequests.get(resourceId)?.amount <=0) {
-                                break;
-                            }
-                        }
-                    }
-                }
-            });
-        });
-    }
-}
-class PopulationManager {
-    constructor(private gameState: GameState) {}
-    public update(deltaTime: number): void {}
-}
-
-class FactionManager {
-    constructor(
-        private gameState: GameState,
-        private entityManager: EntityManager,
-        private techManager: TechManager
-    ) {}
-
-    public update(deltaTime: number): void {
-        const gameSpeedAdjustedDeltaTime = deltaTime * this.gameState.speed;
-
-        this.gameState.factions.forEach(faction => {
-            // Basic income for factions (e.g., from taxes)
-            const factionCities = Array.from(this.gameState.entities.values()).filter(
-                e => e.factionId === faction.id && e.entityType === 'CityEntity'
-            );
-            const incomePerCityPerSecond = 1; // Small placeholder income
-            const rawIncome = factionCities.length * incomePerCityPerSecond * gameSpeedAdjustedDeltaTime;
-            faction.balance = (faction.balance || 0) + rawIncome;
-
-            if (!faction.aiState || !faction.currentStrategy) return;
-
-            faction.aiState.lastDecisionTime += gameSpeedAdjustedDeltaTime;
-            if (faction.aiState.lastDecisionTime >= faction.aiState.decisionInterval) {
-                this.makeStrategicDecision(faction);
-                this.updateDiplomacy(faction);
-                faction.aiState.lastDecisionTime = 0;
-            }
-        });
-    }
-
-    private makeStrategicDecision(faction: Faction): void {
-        if (!faction.currentStrategy) return;
-
-        switch (faction.currentStrategy.primaryGoal) {
-            case FactionGoal.EconomicGrowth:
-                this.pursueEconomicGrowth(faction);
+        // Actual effect implementation will be more detailed.
+        // This is a high-level dispatch based on type.
+        switch (action.type) {
+            case ActionTypes.DEPLOY_EXPERIMENT_ACTION:
+                this.engine.handleDeployExperimentAction(action);
                 break;
-            case FactionGoal.MilitaryExpansion:
-                this.pursueMilitaryExpansion(faction);
+            case ActionTypes.MOVE_ENTITY_ACTION:
+                this.engine.handleMoveEntityAction(action);
                 break;
-            case FactionGoal.TechnologicalSupremacy:
-                this.pursueTechnologicalSupremacy(faction);
+            case ActionTypes.HACK_MEDIA_ACTION:
+                this.engine.handleHackMediaAction(action);
+                break;
+            case ActionTypes.BRIBE_GOVERNMENT_ACTION:
+                this.engine.handleBribeGovernmentAction(action);
+                break;
+            case ActionTypes.FUND_HOSPITAL_ACTION:
+                this.engine.handleFundHospitalAction(action);
+                break;
+            case ActionTypes.SPREAD_PROPAGANDA_ACTION:
+                this.engine.handleSpreadPropagandaAction(action);
+                break;
+            case ActionTypes.DEPLOY_FAKE_WHISTLEBLOWER_ACTION:
+                this.engine.handleDeployFakeWhistleblowerAction(action);
                 break;
             default:
-                if (!faction.currentResearchProjectId) {
-                    this.selectAndStartRandomResearch(faction);
-                }
-                break;
+                console.warn(`Unknown action type: ${action.type}`);
         }
     }
+}
 
-    private pursueTechnologicalSupremacy(faction: Faction): void {
-        if (!faction.currentResearchProjectId) {
-            let techToResearch: string | undefined = faction.currentStrategy?.desiredTech;
-            if (techToResearch && this.techManager.canResearch(faction, techToResearch)) {
-                this.techManager.startResearch(faction, techToResearch);
-            } else {
-                this.selectAndStartRandomResearch(faction);
-            }
-        }
-    }
+class PhenomenonManager {
+    constructor(private gameState: GameState, private engine: GameEngine) {}
 
-    private selectAndStartRandomResearch(faction: Faction): void {
-        const availableToResearch: Technology[] = [];
-        this.gameState.availableTechnologies.forEach(tech => {
-            if (this.techManager.canResearch(faction, tech.id)) {
-                availableToResearch.push(tech);
-            }
-        });
+    updatePhenomena(deltaTime: number): void {
+        // 1. Check triggers for new phenomena
+        this.checkAndTriggerPhenomena(deltaTime);
 
-        if (availableToResearch.length > 0) {
-            availableToResearch.sort((a, b) => a.researchCost - b.researchCost);
-            const techToStart = availableToResearch[0];
-            this.techManager.startResearch(faction, techToStart.id);
-        }
-    }
-
-    private pursueMilitaryExpansion(faction: Faction): void {
-        const unitCost = 1000;
-        if ((faction.balance || 0) < unitCost) return;
-
-        const factionCities = Array.from(this.gameState.entities.values()).filter(
-            e => e.factionId === faction.id && e.entityType === 'CityEntity'
-        );
-        if (factionCities.length === 0) return;
-
-        const spawnCity = factionCities[Math.floor(Math.random() * factionCities.length)];
-        const unitId = `inf_${faction.id}_${this.gameState.time.toFixed(0)}`;
-
-        const unitLocation: Location = {
-            ...spawnCity.location,
-            coordinates: {
-                x: spawnCity.location.coordinates.x + (Math.random() - 0.5) * 0.02,
-                y: spawnCity.location.coordinates.y + (Math.random() - 0.5) * 0.02,
-            }
-        };
-
-        const infantryStats: CombatStats = { attackPower: 10, attackRange: 0.15, attackSpeed: 1 };
-        const newUnit = new InfantryUnitEntity(unitId, `${faction.name} Trooper`, unitLocation, faction.id, infantryStats);
-
-        this.entityManager.addEntity(newUnit);
-        faction.balance = (faction.balance || 0) - unitCost;
-        console.log(`Faction ${faction.name} recruited new unit ${unitId}. Balance: ${faction.balance}`);
-    }
-
-    private updateDiplomacy(faction: Faction): void {
-        if (this.gameState.factions.size < 2) return;
-
-        this.gameState.factions.forEach(otherFaction => {
-            if (faction.id === otherFaction.id) return;
-            let currentRelation = faction.relations.get(otherFaction.id) || 0;
-            if (faction.ideology === otherFaction.ideology) {
-                currentRelation += 0.1;
-            } else {
-                const conflictingIdeologies = [
-                    [Ideology.CORPORATIST, Ideology.ENVIRONMENTALIST],
-                    [Ideology.AUTHORITARIAN, Ideology.DEMOCRATIC]
-                ];
-                if (conflictingIdeologies.some(pair =>
-                    (pair[0] === faction.ideology && pair[1] === otherFaction.ideology) ||
-                    (pair[1] === faction.ideology && pair[0] === otherFaction.ideology)
-                )) {
-                    currentRelation -= 0.05;
-                }
-            }
-            currentRelation = Math.max(-100, Math.min(100, currentRelation));
-            faction.relations.set(otherFaction.id, parseFloat(currentRelation.toFixed(2)));
-            otherFaction.relations.set(faction.id, parseFloat(currentRelation.toFixed(2)));
-        });
-    }
-
-    private pursueEconomicGrowth(faction: Faction): void {
-        const factionEntities = Array.from(this.gameState.entities.values()).filter(e => e.factionId === faction.id);
-        const cities = factionEntities.filter(e => e.entityType === 'CityEntity');
-        const factories = factionEntities.filter(e => e.entityType === 'FactoryEntity');
-        const newFactoryCost = 5000;
-        const newCityCost = 20000;
-
-        if ((faction.balance || 0) > newFactoryCost && factories.length < cities.length * 2) {
-            const availableRecipes = Array.from(this.gameState.recipes.values());
-            if (availableRecipes.length === 0) return;
-            let bestRecipeId: string | undefined = undefined;
-            const nonEnergyRecipes = availableRecipes.filter(r => !r.outputs.has("electricity"));
-            if (nonEnergyRecipes.length > 0) {
-                bestRecipeId = nonEnergyRecipes[Math.floor(Math.random() * nonEnergyRecipes.length)].id;
-            } else if (availableRecipes.length > 0) {
-                bestRecipeId = availableRecipes[Math.floor(Math.random() * availableRecipes.length)].id;
-            }
-
-            if (bestRecipeId) {
-                const newFactoryLocation = this.findSuitableLocationNearCity(faction, cities, faction.currentStrategy?.expansionTargetBiome);
-                if (newFactoryLocation) {
-                    const factoryId = `factory_${faction.id}_${this.gameState.time.toFixed(0)}_${factories.length}`;
-                    const newFactory = new FactoryEntity(factoryId, `${faction.name} Factory`, newFactoryLocation, faction.id, bestRecipeId);
-                    this.entityManager.addEntity(newFactory);
-                    faction.balance = (faction.balance || 0) - newFactoryCost;
-                    console.log(`Faction ${faction.name} built new factory ${factoryId} for recipe ${bestRecipeId}. Balance: ${faction.balance}`);
-                    return;
-                }
-            }
-        }
-
-        if ((faction.balance || 0) > newCityCost && cities.length < 3) {
-            const newCityLocation = this.findSuitableLocationNearCity(faction, cities, faction.currentStrategy?.expansionTargetBiome, true);
-            if (newCityLocation) {
-                const cityId = `city_${faction.id}_${this.gameState.time.toFixed(0)}_${cities.length}`;
-                const newCity = new CityEntity(cityId, `${faction.name} Outpost`, newCityLocation, faction.id, 100);
-                this.entityManager.addEntity(newCity);
-                faction.balance = (faction.balance || 0) - newCityCost;
-                console.log(`Faction ${faction.name} founded new city ${cityId}. Balance: ${faction.balance}`);
-                return;
-            }
-        }
-    }
-
-    private findSuitableLocationNearCity(faction: Faction, cities: IEntity[], targetBiomeId?: string, forCity: boolean = false): Location | undefined {
-        if (cities.length === 0 && !targetBiomeId) {
-            const suitableBiomes: Biome[] = [];
-            this.gameState.biomes.forEach(biome => {
-                if (!biome.controllingFactionId || biome.controllingFactionId === faction.id) {
-                    suitableBiomes.push(biome);
-                } else {
-                    const relationToController = faction.relations.get(biome.controllingFactionId);
-                    if (relationToController === undefined || relationToController >= -20) {
-                        suitableBiomes.push(biome);
+        // 2. Update active phenomena
+        const stillActivePhenomena: IPhenomenon[] = [];
+        for (const phenomenon of this.gameState.activePhenomena) {
+            if (phenomenon.isActive) {
+                this.engine.handlePhenomenonUpdate(phenomenon, deltaTime);
+                if (phenomenon.duration && phenomenon.startTime !== undefined) {
+                    if (this.gameState.time < phenomenon.startTime + phenomenon.duration) {
+                        stillActivePhenomena.push(phenomenon);
+                    } else {
+                        phenomenon.isActive = false;
+                        console.log(`Phenomenon ${phenomenon.name} (ID: ${phenomenon.id}) has expired.`);
+                        // TODO: Add any on-expire logic if needed
                     }
+                } else if (phenomenon.trigger.type === 'continuous') {
+                     stillActivePhenomena.push(phenomenon); // Continuous phenomena don't expire this way
                 }
-            });
-
-            if (suitableBiomes.length > 0) {
-                targetBiomeId = suitableBiomes[Math.floor(Math.random() * suitableBiomes.length)].id;
-            } else {
-                const allBiomes = Array.from(this.gameState.biomes.values());
-                if (allBiomes.length > 0) targetBiomeId = allBiomes[Math.floor(Math.random() * allBiomes.length)].id;
-                else return undefined;
             }
         }
+        this.gameState.activePhenomena = stillActivePhenomena;
+    }
 
-        let baseLocation: Location | undefined;
-        if (cities.length > 0) {
-            const citiesInTargetBiome = cities.filter(c => c.location.biomeId === targetBiomeId);
-            if (citiesInTargetBiome.length > 0) {
-                baseLocation = citiesInTargetBiome[Math.floor(Math.random() * citiesInTargetBiome.length)].location;
-            } else {
-                baseLocation = cities[Math.floor(Math.random() * cities.length)].location;
+    private checkAndTriggerPhenomena(deltaTime: number): void {
+        // Iterate over hex tiles to check for tile-specific conditional phenomena
+        this.engine.hexGridManager.cells.forEach(cell => {
+            const props = (cell as HexCell & { shProps?: HexTileProperties }).shProps;
+            if (!props) return;
+
+            // Riots
+            if (props.trust < 0.3 && Math.random() < (0.05 * deltaTime * this.gameState.speed)) { // 5% chance per second approx
+                const existingRiot = this.gameState.activePhenomena.find(p => p.type === PhenomenonTypes.PHENOMENON_RIOTS && (p as any).targetId === cell.id);
+                if (!existingRiot) {
+                    const riotIntensity = 0.1 + Math.random() * 0.2; // Random intensity
+                    const riotDuration = 20 + Math.random() * 20; // Lasts 20-40s
+                    const riot = PhenomenonTypes.createRiotPhenomenon(cell.id, riotIntensity, riotDuration);
+                    this.activatePhenomenon(riot);
+                }
             }
-        } else if (targetBiomeId) {
-            const biome = this.gameState.biomes.get(targetBiomeId);
-            if (biome) {
-                baseLocation = {
-                    layer: PhysicsLayer.Surface,
-                    coordinates: { x: Math.random() * 1.8 - 0.9, y: Math.random() * 1.8 - 0.9 },
-                    biomeId: targetBiomeId,
-                };
-            } else { return undefined; }
-        } else { return undefined; }
 
-        const offsetScale = forCity ? 0.3 : 0.05;
-        return {
-            layer: PhysicsLayer.Surface,
-            coordinates: {
-                x: baseLocation.coordinates.x + (Math.random() - 0.5) * offsetScale,
-                y: baseLocation.coordinates.y + (Math.random() - 0.5) * offsetScale,
-            },
-            biomeId: baseLocation.biomeId || targetBiomeId,
-            regionId: baseLocation.regionId,
-        };
+            // Trust Decay (continuous, but can be modeled as frequent small probabilistic events or direct updates)
+            if (props.suspicion > 0.5) {
+                 props.trust = Math.max(0, props.trust - (0.01 * deltaTime * this.gameState.speed)); // 0.01 per second
+            }
+
+            // Depopulation (continuous)
+            if (props.fertility < 0.8) {
+                props.population = Math.max(0, props.population * (1 - (0.0001 * deltaTime * this.gameState.speed))); // 0.01% per second
+            }
+
+            // TODO: Add more phenomenon triggers:
+            // - Distrust in Doctors (Hospital misdiagnoses)
+            // - Respirator-Induced ARDS (High ventilator use)
+            // - Whistleblower Leaks (High suspicion)
+        });
+
+        // Global phenomena checks
+        // Example: Scientific Breakthrough (based on research points or random chance)
+        // if (this.gameState.factions.get('player_consortium')?.researchPoints > 1000 && Math.random() < 0.01 * deltaTime * this.gameState.speed) {
+        //    // trigger scientific breakthrough
+        // }
+    }
+
+    public activatePhenomenon(phenomenon: IPhenomenon): void {
+        phenomenon.startTime = this.gameState.time;
+        phenomenon.isActive = true;
+        this.gameState.activePhenomena.push(phenomenon);
+        console.log(`Phenomenon Activated: ${phenomenon.name} (ID: ${phenomenon.id}), Scope: ${phenomenon.scope}, Target: ${(phenomenon as any).targetId || 'Global'}`);
+    }
+}
+
+class TechnologyManagerSH {
+    constructor(private gameState: GameState) {}
+
+    startResearch(techId: string): boolean {
+        const tech = this.gameState.availableTechnologies.get(techId);
+        if (!tech || this.gameState.unlockedTechnologies.has(techId) || this.gameState.globalResearchProgress?.currentTechId) {
+            return false; // Already unlocked, doesn't exist, or research already in progress
+        }
+        // Check prerequisites
+        for (const prereqId of tech.prerequisites) {
+            if (!this.gameState.unlockedTechnologies.has(prereqId)) {
+                console.warn(`Cannot research ${techId}, prerequisite ${prereqId} not met.`);
+                return false;
+            }
+        }
+        this.gameState.globalResearchProgress = { currentTechId: techId, pointsAccumulated: 0 };
+        console.log(`Started research on: ${tech.name}`);
+        return true;
+    }
+
+    updateResearch(deltaTime: number, researchPointsEarned: number): void {
+        if (this.gameState.globalResearchProgress && this.gameState.globalResearchProgress.currentTechId) {
+            const techId = this.gameState.globalResearchProgress.currentTechId;
+            const tech = this.gameState.availableTechnologies.get(techId);
+            if (tech) {
+                this.gameState.globalResearchProgress.pointsAccumulated += researchPointsEarned * deltaTime; // Assuming researchPointsEarned is per second
+                if (this.gameState.globalResearchProgress.pointsAccumulated >= tech.researchCost) {
+                    this.unlockTechnology(techId);
+                }
+            }
+        }
+    }
+
+    private unlockTechnology(techId: string): void {
+        const tech = this.gameState.availableTechnologies.get(techId);
+        if (tech && !this.gameState.unlockedTechnologies.has(techId)) {
+            this.gameState.unlockedTechnologies.add(techId);
+            this.gameState.globalResearchProgress = { pointsAccumulated: 0 }; // Clear current research
+            console.log(`Technology Unlocked: ${tech.name}`);
+            // Apply immediate effects of the technology
+            tech.effects.forEach(effect => this.applyTechnologyEffect(effect));
+             // Potentially trigger a game event or notification
+        }
+    }
+
+    private applyTechnologyEffect(effect: SHTechnologyEffect): void {
+        console.log(`Applying tech effect: ${effect.description}`);
+        // Logic to apply various effects will be built out.
+        // For example, modifying phenomenon risks, unlocking actions (by making them available in UI), etc.
+        // This is a placeholder for now.
     }
 }
 
 
 // GAME ENGINE
-// Import entities for initialization
-import { FactoryEntity } from './entities/FactoryEntity';
-import { ScoutUnitEntity } from './entities/ScoutUnitEntity';
-import { SoundManager } from './SoundManager'; // Import SoundManager
-import { HexGridManager, HexCell } from './HexGridManager'; // Import HexGridManager
-import * as THREE from 'three'; // Required for HexGridManager interaction
+import { SoundManager } from './SoundManager';
+import { HexGridManager, HexCell } from './HexGridManager';
+import * as THREE from 'three';
+import * as ActionTypes from './actions/actionTypes';
+import * as PhenomenonTypes from './phenomena/phenomenonTypes';
 
 export class GameEngine {
   private gameState: GameState;
-  public hexGridManager: HexGridManager; // Make HexGridManager public or add a getter
+  public hexGridManager: HexGridManager;
   public entityManager: EntityManager;
   public physicsManager: PhysicsManager;
-  public economyManager: EconomyManager;
-  public populationManager: PopulationManager;
-  public factionManager: FactionManager;
-  public weatherManager: WeatherManager;
-  public disasterManager: DisasterManager;
-  public techManager: TechManager;
-  public territoryManager: TerritoryManager;
-  public soundManager: SoundManager; // Add SoundManager instance
+  public soundManager: SoundManager;
 
-  private activeAmbientSounds: Set<string> = new Set(); // To track current global ambient sounds
+  public actionManager: ActionManager;
+  public phenomenonManager: PhenomenonManager;
+  public technologyManagerSH: TechnologyManagerSH;
 
-  constructor(earthRadius: number = 100, hexGridSubdivisions: number = 2) { // Added parameters for HexGridManager
+
+  private activeAmbientSounds: Set<string> = new Set();
+
+  constructor(earthRadius: number = 100, hexGridSubdivisions: number = 2) {
     this.gameState = this.createInitialGameState();
-    this.soundManager = new SoundManager(); // Initialize SoundManager
-    this.hexGridManager = new HexGridManager(earthRadius, hexGridSubdivisions); // Initialize HexGridManager
+    this.soundManager = new SoundManager();
+    this.hexGridManager = new HexGridManager(earthRadius, hexGridSubdivisions);
     this.entityManager = new EntityManager(this.gameState);
     this.physicsManager = new PhysicsManager(this.gameState);
-    this.economyManager = new EconomyManager(this.gameState);
-    this.populationManager = new PopulationManager(this.gameState);
-    this.techManager = new TechManager(this.gameState);
-    this.factionManager = new FactionManager(this.gameState, this.entityManager, this.techManager);
-    this.weatherManager = new WeatherManager(this.gameState);
-    // Pass SoundManager to DisasterManager if it needs to trigger sounds directly
-    this.disasterManager = new DisasterManager(this.gameState, this.soundManager);
-    this.territoryManager = new TerritoryManager(this.gameState);
-    this.initializeWorld();
-    this.soundManager.setMusic('main_theme_peaceful'); // Start with peaceful music
+
+    this.actionManager = new ActionManager(this.gameState, this);
+    this.phenomenonManager = new PhenomenonManager(this.gameState, this);
+    this.technologyManagerSH = new TechnologyManagerSH(this.gameState);
+
+    this.initializeSilentHelixWorld();
+    this.soundManager.setMusic('placeholder_music_tension');
   }
 
   private createInitialGameState(): GameState {
     return {
-      time: 0, running: false, speed: 1,
-      entities: new Map<string, IEntity>(), factions: new Map<string, Faction>(),
-      worldRegions: new Map<string, WorldRegion>(), biomes: new Map<string, Biome>(),
-      resources: new Map<string, Resource>(), recipes: new Map<string, ProductionRecipe>(),
-      globalPopulation: 0, globalHealth: 0, globalEnvironment: 0, globalStability: 0,
-      globalSuffering: 0, globalEconomicProsperity: 0,
-      activeDisasters: [],
-      availableTechnologies: new Map<string, Technology>(),
+      time: 0,
+      running: false,
+      speed: 1,
+      entities: new Map<string, IEntity>(),
+      factions: new Map<string, SHFaction>(),
+      pendingActions: [],
+      activePhenomena: [],
+      availableTechnologies: new Map<string, SHTechnology>(),
+      unlockedTechnologies: new Set<string>(),
+      globalTrust: 0.5,
+      globalSuspicion: 0.1,
+      globalPopulation: 0,
+      globalPlayerExposure: 0,
+      globalResearchProgress: { pointsAccumulated: 0 },
+      settings: {
+        baseSuspicionDecayRate: 0.001,
+        baseTrustDecayRate: 0.001,
+      },
     };
   }
 
-  private initializeWorld(): void {
-    this.initializeTechnologies();
+  private initializeSilentHelixWorld(): void {
+    this.initializeHexGridProperties();
+    this.initializeFactions();
+    this.initializeTechnologies_SH();
 
-    const resources: Resource[] = [
-      { id: 'food', name: 'Food', category: 'FinishedGood', baseValue: 5, currentPrice: 5 },
-      { id: 'water', name: 'Water', category: 'Raw', baseValue: 1, currentPrice: 1 },
-      { id: 'wood', name: 'Wood', category: 'Raw', baseValue: 3, currentPrice: 3 },
-      { id: 'stone', name: 'Stone', category: 'Raw', baseValue: 2, currentPrice: 2 },
-      { id: 'iron_ore', name: 'Iron Ore', category: 'Raw', baseValue: 10, currentPrice: 10 },
-      { id: 'coal', name: 'Coal', category: 'Raw', baseValue: 8, currentPrice: 8 },
-      { id: 'steel', name: 'Steel', category: 'Processed', baseValue: 30, currentPrice: 30 },
-      { id: 'tools', name: 'Tools', category: 'FinishedGood', baseValue: 50, currentPrice: 50 },
-      { id: 'electricity', name: 'Electricity', category: 'Energy', baseValue: 20, currentPrice: 20 },
-      { id: 'housing_units', name: 'Housing Units', category: 'FinishedGood', baseValue: 100, currentPrice: 100 },
-      { id: 'machine_parts', name: 'Machine Parts', category: 'Processed', baseValue: 70, currentPrice: 70 },
-      { id: 'advanced_machinery', name: 'Advanced Machinery', category: 'FinishedGood', baseValue: 250, currentPrice: 250 }
-    ];
-    resources.forEach(r => {
-        if (r.currentPrice === undefined) r.currentPrice = r.baseValue;
-        this.gameState.resources.set(r.id, r);
-    });
+    this.initializeStartingEntities(); // New method for SH entities
 
-    const recipes: ProductionRecipe[] = [
-      { id: 'steel_recipe', name: 'Steel Production', inputs: new Map([['iron_ore', 2], ['coal', 1], ['electricity', 5]]), outputs: new Map([['steel', 1]]), duration: 10, energyCost: 0 },
-      { id: 'tools_recipe', name: 'Tool Production', inputs: new Map([['steel', 1], ['wood', 2], ['electricity', 3]]), outputs: new Map([['tools', 1]]), duration: 15, energyCost: 0 },
-      { id: 'lumber_mill_recipe', name: 'Lumber Mill', inputs: new Map([['wood', 5], ['electricity', 2]]), outputs: new Map([['processed_wood', 5]]), duration: 8, energyCost: 0 },
-      { id: 'power_plant_coal_recipe', name: 'Coal Power Plant', inputs: new Map([['coal', 1]]), outputs: new Map([['electricity', 10]]), duration: 5, energyCost: 0 },
-      { id: 'machine_parts_recipe', name: 'Machine Parts Production', inputs: new Map([['steel', 2], ['electricity', 10]]), outputs: new Map([['machine_parts', 1]]), duration: 20, energyCost: 0 },
-      { id: 'advanced_machinery_recipe', name: 'Advanced Machinery Production', inputs: new Map([['machine_parts', 1], ['tools', 3], ['electricity', 15]]), outputs: new Map([['advanced_machinery', 1]]), duration: 30, energyCost: 0 }
-    ];
-    recipes.forEach(r => this.gameState.recipes.set(r.id, r));
-    if (!this.gameState.resources.has('processed_wood')) {
-        this.gameState.resources.set('processed_wood', { id: 'processed_wood', name: 'Processed Wood', category: 'Processed', baseValue: 6, currentPrice: 6 });
+    this.calculateGlobalMetrics();
+  }
+
+  private initializeStartingEntities(): void {
+    const playerFactionId = 'player_consortium';
+    const allCellIds = Array.from(this.hexGridManager.cells.keys());
+
+    if (allCellIds.length === 0) {
+      console.warn("No hex cells available to place starting entities.");
+      return;
     }
 
-    const temperateForest: Biome = {
-      id: 'temperate_forest_1', name: 'Temperate Forest',
-      climateProfile: { averageTemperature: 15, averagePrecipitation: 800, temperatureVariance: 5, precipitationVariance: 0.2 },
-      terrainProperties: { arableLandPercentage: 0.4, movementModifier: 0.9 },
-      naturalResources: new Map([['wood', 200], ['food', 100], ['water', 150], ['stone', 50], ['coal', 30]]),
-      currentWeather: { temperature: 15, precipitation: 0, windSpeed: 10, description: "Clear" },
-      factionInfluence: new Map(), controllingFactionId: undefined
-    };
-    const mountainRange: Biome = {
-        id: 'mountain_range_1', name: 'Mountain Range',
-        climateProfile: { averageTemperature: 5, averagePrecipitation: 1200, temperatureVariance: 8, precipitationVariance: 0.3 },
-        terrainProperties: { arableLandPercentage: 0.05, movementModifier: 0.5 },
-        naturalResources: new Map([['iron_ore', 150], ['stone', 200], ['coal', 80], ['water', 50]]),
-        currentWeather: { temperature: 5, precipitation: 0, windSpeed: 15, description: "Clear" },
-        factionInfluence: new Map(), controllingFactionId: undefined
-    };
-    this.gameState.biomes.set(temperateForest.id, temperateForest);
-    this.gameState.biomes.set(mountainRange.id, mountainRange);
+    // Get a few random hex cell IDs for placing entities
+    const getRandomCellId = () => allCellIds[Math.floor(Math.random() * allCellIds.length)];
+
+    // Player Scientist
+    const scientist1 = new ScientistEntity(
+      'sci_player_01',
+      'Dr. Evelyn Hayes',
+      { type: EntityLocationType.HexTile, hexCellId: getRandomCellId() },
+      { expertise: 0.8, allegiance: 'consortium' },
+      playerFactionId
+    );
+    this.entityManager.addEntity(scientist1);
+
+    // Media Outlet 1 (Pro-Consortium)
+    const media1 = new MediaOutletEntity(
+      'media_01',
+      'Global Truth Network',
+      { type: EntityLocationType.HexTile, hexCellId: getRandomCellId() },
+      { reach: 0.7, bias: 'pro-consortium', credibility: 0.75 },
+      // No specific faction, or could be a neutral faction ID
+    );
+    this.entityManager.addEntity(media1);
+
+    // Media Outlet 2 (Anti-Consortium)
+    const media2 = new MediaOutletEntity(
+      'media_02',
+      'The People\'s Voice',
+      { type: EntityLocationType.HexTile, hexCellId: getRandomCellId() },
+      { reach: 0.5, bias: 'anti-consortium', credibility: 0.6 },
+    );
+    this.entityManager.addEntity(media2);
     
-    const factionA: Faction = {
-      id: 'faction_a', name: 'The Pioneers', ideology: Ideology.TECHNOCRATIC,
-      powerLevel: 70, influence: new Map(), relations: new Map(), headquartersRegionId: 'na',
-      balance: 20000, currentStrategy: { primaryGoal: FactionGoal.TechnologicalSupremacy, desiredTech: 'basic_rocketry' },
-      aiState: { lastDecisionTime: 0, decisionInterval: 60 * 5 },
-      researchPoints: 0, researchRate: 5, unlockedTechnologies: [], currentResearchProjectId: undefined,
-    };
-    const factionB: Faction = {
-      id: 'faction_b', name: 'The Marauders', ideology: Ideology.AUTHORITARIAN,
-      powerLevel: 60, influence: new Map(), relations: new Map(), headquartersRegionId: 'na',
-      balance: 15000, currentStrategy: { primaryGoal: FactionGoal.MilitaryExpansion },
-      aiState: { lastDecisionTime: 0, decisionInterval: 60 * 4 },
-      researchPoints: 0, researchRate: 2, unlockedTechnologies: [], currentResearchProjectId: undefined,
-    };
-    this.gameState.factions.set(factionA.id, factionA);
-    this.gameState.factions.set(factionB.id, factionB);
-    factionA.relations.set(factionB.id, -50);
-    factionB.relations.set(factionA.id, -50);
+    // Hospital 1
+    const hospital1 = new HospitalEntity(
+      'hosp_01',
+      'City General Hospital',
+      { type: EntityLocationType.HexTile, hexCellId: getRandomCellId() },
+      { funding: 0.6, localTrust: 0.7, capacity: 500 }
+    );
+    this.entityManager.addEntity(hospital1);
 
-    const firstCityLocation: Location = { layer: PhysicsLayer.Surface, coordinates: { x: -0.5, y: 0.25 }, biomeId: temperateForest.id, regionId: 'na' };
-    const firstCity = new CityEntity('city_01', 'Pioneer Town', firstCityLocation, factionA.id, 5000);
-    firstCity.resourceStorageComponent.addResource('food', 100);
-    this.entityManager.addEntity(firstCity);
+    // Drone 1 (Player)
+    const drone1 = new DroneEntity(
+        'drone_player_01',
+        'Recon Drone Alpha',
+        { type: EntityLocationType.HexTile, hexCellId: scientist1.location.hexCellId }, // Start near player scientist
+        { capacity: 5, operationalRange: 20},
+        playerFactionId
+    );
+    this.entityManager.addEntity(drone1);
 
-    const secondCityLocation: Location = { layer: PhysicsLayer.Surface, coordinates: { x: 0.5, y: -0.25 }, biomeId: mountainRange.id, regionId: 'na' };
-    const secondCity = new CityEntity('city_02', 'Marauder Keep', secondCityLocation, factionB.id, 3000);
-    secondCity.resourceStorageComponent.addResource('food', 50);
-    this.entityManager.addEntity(secondCity);
-
-    const factoryLocation: Location = { layer: PhysicsLayer.Surface, coordinates: { x: -0.45, y: 0.20 }, biomeId: temperateForest.id, regionId: 'na' };
-    const steelRecipe = this.gameState.recipes.get('steel_recipe');
-    if (!steelRecipe) {
-        const newSteelRecipe: ProductionRecipe = { id: 'steel_recipe', name: 'Steel Production', inputs: new Map([['iron_ore', 2]]), outputs: new Map([['steel', 1]]), duration: 10, energyCost: 5 };
-        this.gameState.recipes.set(newSteelRecipe.id, newSteelRecipe);
-    }
-    const firstFactory = new FactoryEntity('factory_01', 'Steel Mill', factoryLocation, factionA.id, 'steel_recipe');
-    firstFactory.resourceStorageComponent.addResource('iron_ore', 20);
-    this.entityManager.addEntity(firstFactory);
-    if (firstFactory.initEntity) { firstFactory.initEntity(this.gameState); }
-
-    const scoutStartLocation: Location = { layer: PhysicsLayer.Surface, coordinates: { x: -0.3, y: 0.15 }, biomeId: temperateForest.id, regionId: 'na' };
-    const firstScout = new ScoutUnitEntity('scout_01', 'Recon Alpha', scoutStartLocation, factionA.id, 0.2);
-    this.entityManager.addEntity(firstScout);
-
-    const infantryStats: CombatStats = { attackPower: 10, attackRange: 0.15, attackSpeed: 1 };
-    const factionAInfantryLocation: Location = { layer: PhysicsLayer.Surface, coordinates: { x: -0.4, y: 0.20 }, biomeId: temperateForest.id, regionId: 'na' };
-    const factionAInfantry = new InfantryUnitEntity('inf_a_01', 'Pioneer Guard', factionAInfantryLocation, factionA.id, infantryStats);
-    this.entityManager.addEntity(factionAInfantry);
-
-    const factionBInfantryLocation: Location = { layer: PhysicsLayer.Surface, coordinates: { x: 0.4, y: -0.20 }, biomeId: mountainRange.id, regionId: 'na' };
-    const factionBInfantry = new InfantryUnitEntity('inf_b_01', 'Marauder Thug', factionBInfantryLocation, factionB.id, {...infantryStats, attackPower: 12});
-    this.entityManager.addEntity(factionBInfantry);
-
-    this.createInitialWorldRegions_Legacy();
-    this.calculateGlobalStats();
+    console.log(`Initialized ${this.gameState.entities.size} starting entities for Silent Helix.`);
   }
 
-  private initializeTechnologies(): void {
-    const techs: Technology[] = [
-      { id: 'basic_construction', name: 'Basic Construction', description: 'Improves understanding of basic building techniques.', researchCost: 100, prerequisites: [], effects: [{ type: 'improve_production_efficiency', resourceCategory: 'Raw', bonus: 0.05 }] },
-      { id: 'improved_agriculture', name: 'Improved Agriculture', description: 'Advanced farming techniques increase food output.', researchCost: 150, prerequisites: ['basic_construction'], effects: [{ type: 'improve_production_efficiency', resourceId: 'food', bonus: 0.1 }] },
-      { id: 'basic_rocketry', name: 'Basic Rocketry', description: 'Unlocks Scout Units for exploration.', researchCost: 200, prerequisites: ['basic_construction'], effects: [{ type: 'unlock_unit', unitId: 'ScoutUnitEntity' }] },
-      { id: 'advanced_manufacturing', name: 'Advanced Manufacturing', description: 'Streamlines production of complex goods like Machine Parts.', researchCost: 300, prerequisites: ['basic_construction'], effects: [ { type: 'improve_production_efficiency', resourceId: 'machine_parts', bonus: 0.15 }, { type: 'improve_production_efficiency', resourceId: 'tools', bonus: 0.10 } ] },
+  private initializeHexGridProperties(): void {
+    this.hexGridManager.cells.forEach(cell => {
+        const properties: HexTileProperties = {
+            population: Math.floor(Math.random() * 1000000 + 50000), // Random population
+            trust: Math.random() * 0.4 + 0.3,
+            suspicion: Math.random() * 0.2,
+            health: Math.random() * 0.3 + 0.6,
+            infrastructure: Math.random() * 0.5 + 0.2,
+            fertility: Math.random() * 0.4 + 0.5,
+        };
+        // shProps is now an official optional member of HexCell.
+        cell.shProps = properties;
+    });
+  }
+
+  private initializeFactions(): void {
+    const playerConsortium: SHFaction = {
+      id: 'player_consortium',
+      name: 'Silent Helix Consortium',
+      isPlayer: true,
+      color: '#00FFFF',
+      researchPoints: 0,
+    };
+    this.gameState.factions.set(playerConsortium.id, playerConsortium);
+  }
+  
+  private initializeTechnologies_SH(): void {
+    const techs: SHTechnology[] = [
+      {
+        id: 'basic_mrna_synthesis', name: 'Basic mRNA Synthesis',
+        description: 'Fundamental understanding of mRNA sequence design and production.',
+        researchCost: 100, prerequisites: [],
+        effects: [{ type: 'unlock_action', actionId: 'deploy_basic_experiment', description: 'Allows deployment of simple mRNA experiments.' }]
+      },
+      {
+        id: 'nanoparticle_delivery', name: 'Nanoparticle Delivery Systems',
+        description: 'Develop lipid nanoparticles for improved mRNA delivery.',
+        researchCost: 150, prerequisites: ['basic_mrna_synthesis'],
+        effects: [{ type: 'improve_efficiency', parameter: 'mrna_delivery_effectiveness', modifier: 0.1, description: 'Increases effectiveness of mRNA delivery by 10%.' }]
+      },
+      {
+        id: 'ai_drug_discovery', name: 'AI Drug Discovery',
+        description: 'Utilize AI to accelerate the discovery of novel mRNA sequences and countermeasures.',
+        researchCost: 300, prerequisites: ['nanoparticle_delivery'],
+        effects: [
+          { type: 'improve_efficiency', parameter: 'research_speed_modifier', modifier: 0.2, description: 'Increases overall research speed by 20%.'},
+          { type: 'unlock_action', actionId: 'ai_assisted_experiment_design', description: 'Unlocks AI-assisted experiment design for more complex trials.'}
+        ]
+      },
+      {
+        id: 'global_media_manipulation', name: 'Global Media Manipulation',
+        description: 'Advanced techniques for influencing global media narratives and public perception.',
+        researchCost: 250, prerequisites: [],
+        effects: [
+            { type: 'improve_efficiency', parameter: 'propaganda_effectiveness', modifier: 0.25, description: 'Increases propaganda effectiveness by 25%.'},
+            { type: 'modify_global_variable', parameter: 'base_suspicion_increase_rate_modifier', modifier: -0.1, description: 'Reduces base rate of suspicion increase globally by 10%.'}
+        ]
+      }
     ];
     techs.forEach(t => this.gameState.availableTechnologies.set(t.id, t));
   }
-  
-  private createInitialWorldRegions_Legacy(): void {
-    const regionsData: Array<WorldRegion> = [ { id: 'na', name: 'North America', population: 0, health: 78, environment: 65, stability: 75, rareEarthElements: 70, foodSupply: 80, technologyLevel: 85, infrastructureQuality: 80, x: -0.6, y: 0.3, color: [0.3, 0.6, 0.9] as [number,number,number] }, ];
-    regionsData.forEach(data => {
-        let regionPopulation = 0;
-        this.gameState.entities.forEach(entity => {
-            if (entity.entityType === 'CityEntity' && entity.location.regionId === data.id) {
-                const popComp = entity.getComponent<IPopulationComponent>('PopulationComponent');
-                if (popComp) { regionPopulation += popComp.getTotalPopulation(); } // Changed to use getTotalPopulation()
-            }
-        });
-        data.population = Math.floor(regionPopulation);
-        this.gameState.worldRegions.set(data.id, data);
-    });
-  }
+
 
   public updateWorld(deltaTime: number): GameState {
     if (!this.gameState.running) return this.gameState;
     const scaledDeltaTime = deltaTime * this.gameState.speed;
     this.gameState.time += scaledDeltaTime;
 
-    this.physicsManager.update(scaledDeltaTime);
-    this.populationManager.update(scaledDeltaTime);
-    this.economyManager.update(scaledDeltaTime);
-    this.weatherManager.update(scaledDeltaTime);
-    this.disasterManager.update(scaledDeltaTime);
-    this.techManager.update(scaledDeltaTime);
-    this.territoryManager.update(scaledDeltaTime);
-    this.entityManager.updateAll(scaledDeltaTime);
-    this.factionManager.update(scaledDeltaTime);
+    // Player input / AI decisions would typically generate actions here.
+    // For now, actions are dispatched via `dispatchAction`.
 
-    this.updateGlobalAmbientSounds(); // New method for ambient sounds
-    this.calculateGlobalStats();
+    this.phenomenonManager.updatePhenomena(scaledDeltaTime);
+    this.actionManager.processPendingActions();
+    this.entityManager.updateAllEntities(scaledDeltaTime);
+    this.physicsManager.update(scaledDeltaTime);
+
+    // Update research based on player faction's research rate (to be defined)
+    const playerFaction = this.gameState.factions.get('player_consortium');
+    const baseResearchRate = 1; // Example: 1 research point per second per active lab/scientist?
+    // This rate should be modified by technology, number of scientists, etc.
+    if (playerFaction) {
+        this.technologyManagerSH.updateResearch(scaledDeltaTime, baseResearchRate /* * modifiers */);
+    }
+
+    this.calculateGlobalMetrics();
+    this.updateGlobalSoundscape(scaledDeltaTime);
+
     return this.gameState;
   }
 
-  private updateGlobalAmbientSounds(): void {
-    let totalPrecipitation = 0;
-    let totalWindSpeed = 0;
-    let biomesCount = 0;
-    let isSnowingSomewhere = false;
-
-    this.gameState.biomes.forEach(biome => {
-        if (biome.currentWeather) {
-            totalPrecipitation += biome.currentWeather.precipitation;
-            totalWindSpeed += biome.currentWeather.windSpeed;
-            if (biome.currentWeather.precipitation > 0.1 && biome.currentWeather.temperature <= 0) {
-                isSnowingSomewhere = true;
-            }
-            biomesCount++;
-        }
-    });
-
-    const avgPrecip = biomesCount > 0 ? totalPrecipitation / biomesCount : 0;
-    const avgWind = biomesCount > 0 ? totalWindSpeed / biomesCount : 0;
-
-    // Manage rain sounds
-    if (avgPrecip > 2.0 && !isSnowingSomewhere) { // Heavy rain
-        this.startAmbient('rain_heavy');
-        this.stopAmbient('rain_light');
-    } else if (avgPrecip > 0.2 && !isSnowingSomewhere) { // Light rain
-        this.startAmbient('rain_light');
-        this.stopAmbient('rain_heavy');
-    } else {
-        this.stopAmbient('rain_light');
-        this.stopAmbient('rain_heavy');
+  private updateGlobalSoundscape(deltaTime: number): void {
+    // Example: Tie ambient sound to global suspicion
+    if (this.gameState.globalSuspicion > 0.7 && !this.activeAmbientSounds.has('suspense_high')) {
+        this.soundManager.stopAmbientSound('suspense_low' as any); // TODO: Define sound types
+        this.soundManager.playAmbientSound('suspense_high' as any);
+        this.activeAmbientSounds.add('suspense_high');
+        this.activeAmbientSounds.delete('suspense_low');
+    } else if (this.gameState.globalSuspicion <= 0.3 && !this.activeAmbientSounds.has('suspense_low')) {
+        this.soundManager.stopAmbientSound('suspense_high' as any);
+        this.soundManager.playAmbientSound('suspense_low' as any);
+        this.activeAmbientSounds.add('suspense_low');
+        this.activeAmbientSounds.delete('suspense_high');
     }
-
-    // Manage snow (visuals are global, so ambient sound can be too for now)
-    // If specific biome sounds were implemented, this would be different.
-    // For now, if it's snowing visually (driven by avg temp in Earth3D), play a generic snow/wind.
-    // This part is a bit tricky as Earth3D handles visuals based on averages.
-    // Let's assume if avgPrecip > 0.2 AND avgTemp <= 0 (from Earth3D logic), it's "snowing globally".
-    // Actual snow ambient sound might be part of 'wind_strong' or a dedicated 'snow_storm' sound.
-    // For now, focusing on rain and wind based on engine data.
-
-    // Manage wind sounds
-    if (avgWind > 25) { // Strong wind
-        this.startAmbient('wind_strong');
-        this.stopAmbient('wind_calm');
-    } else if (avgWind > 5) { // Calm wind
-        this.startAmbient('wind_calm');
-        this.stopAmbient('wind_strong');
-    } else { // Very little wind
-        this.stopAmbient('wind_calm');
-        this.stopAmbient('wind_strong');
-    }
+    // Add more complex sound logic as needed
   }
 
-  private startAmbient(soundName: any): void { // Type should be AmbientSound, but any for now due to string literal types
-    if (!this.activeAmbientSounds.has(soundName)) {
-        this.soundManager.playAmbientSound(soundName);
-        this.activeAmbientSounds.add(soundName);
-    }
-  }
-
-  private stopAmbient(soundName: any): void { // Type should be AmbientSound
-      if (this.activeAmbientSounds.has(soundName)) {
-          this.soundManager.stopAmbientSound(soundName);
-          this.activeAmbientSounds.delete(soundName);
-      }
-  }
-
-  private calculateGlobalStats(): void {
+  private calculateGlobalMetrics(): void {
     let totalPopulation = 0;
-    this.gameState.entities.forEach(entity => {
-        if (entity.entityType === 'CityEntity' && entity.hasComponent('PopulationComponent')) {
-            const popComp = entity.getComponent<IPopulationComponent>('PopulationComponent');
-            if (popComp) {
-                totalPopulation += popComp.getTotalPopulation(); // Changed to use getTotalPopulation()
-            }
+    let sumTrust = 0;
+    let sumSuspicion = 0;
+    let numCellsWithPopulation = 0;
+
+    this.hexGridManager.cells.forEach(cell => {
+        const props = (cell as HexCell & { shProps?: HexTileProperties }).shProps;
+        if (props && props.population > 0) {
+            totalPopulation += props.population;
+            sumTrust += props.trust * props.population; // Weighted by population
+            sumSuspicion += props.suspicion * props.population; // Weighted by population
+            numCellsWithPopulation++;
         }
     });
-    this.gameState.globalPopulation = Math.floor(totalPopulation);
 
-    if (this.gameState.worldRegions.size > 0) {
-        let totalHealth = 0, count = 0;
-        this.gameState.worldRegions.forEach(r => { totalHealth += r.health; count++; });
-        this.gameState.globalHealth = count > 0 ? totalHealth / count : 50;
+    this.gameState.globalPopulation = totalPopulation;
+    if (totalPopulation > 0) {
+        this.gameState.globalTrust = sumTrust / totalPopulation;
+        this.gameState.globalSuspicion = sumSuspicion / totalPopulation;
     } else {
-        this.gameState.globalHealth = 50;
+        this.gameState.globalTrust = 0.5;
+        this.gameState.globalSuspicion = 0.1;
     }
-    this.gameState.globalSuffering = Math.max(0, 100 - this.gameState.globalHealth);
-    this.gameState.globalEconomicProsperity = 50;
+    // Decay global suspicion/trust (or apply on hex tiles directly)
+    this.gameState.globalSuspicion = Math.max(0, this.gameState.globalSuspicion - this.gameState.settings.baseSuspicionDecayRate * this.gameState.speed * (1/60)); // Assuming 60fps for delta
+    this.gameState.globalTrust = Math.max(0, this.gameState.globalTrust - this.gameState.settings.baseTrustDecayRate * this.gameState.speed * (1/60));
   }
 
   public setRunning(running: boolean): void { this.gameState.running = running; }
   public setSpeed(speed: number): void { this.gameState.speed = Math.max(0.1, speed); }
   public getGameState(): Readonly<GameState> { return this.gameState; }
 
-  // --- HexGridManager specific methods ---
-
-  /**
-   * Returns the HexGridManager instance.
-   * @returns The HexGridManager.
-   */
   public getHexGridManager(): HexGridManager {
     return this.hexGridManager;
   }
-
-  /**
-   * Returns all hex cells from the HexGridManager.
-   * @returns A map of HexCell objects.
-   */
   public getHexGridCells(): Map<string, HexCell> {
     return this.hexGridManager.cells;
   }
-
-  /**
-   * Finds the closest hex cell to a given world point.
-   * The world point should be a 3D vector on or near the surface of the sphere.
-   * @param worldPoint The THREE.Vector3 representing the point in world space.
-   * @returns The closest HexCell or null if not found.
-   */
   public getCellForWorldPoint(worldPoint: THREE.Vector3): HexCell | null {
     return this.hexGridManager.getCellForPoint(worldPoint);
   }
-
-  /**
-   * Retrieves a specific hex cell by its ID.
-   * @param cellId The ID of the hex cell.
-   * @returns The HexCell or undefined if not found.
-   */
   public getHexCellById(cellId: string): HexCell | undefined {
     return this.hexGridManager.getCellById(cellId);
+  }
+
+  public dispatchAction(action: IAction): void {
+    this.gameState.pendingActions.push(action);
+    console.log(`Action dispatched: ${action.type}, Target: ${action.target.targetId || 'Global'}`);
+  }
+
+  // Placeholder handlers for actions and phenomena effects (to be implemented in Step 5)
+  // These would be called by ActionManager and PhenomenonManager respectively.
+
+  // Action Handlers
+  public handleDeployExperimentAction(action: IAction): void {
+    const params = action.parameters as ActionTypes.DeployExperimentParams;
+    const targetHexId = action.target.targetId;
+    console.log(`GameEngine: Handling DeployExperiment on ${targetHexId} by ${params.scientistId}`, params);
+    // TODO:
+    // 1. Get scientist entity, check capabilities.
+    // 2. Get target hex cell.
+    // 3. Calculate outcomes based on params (delivery, dosage, placebo), hex props (infra, trust).
+    // 4. Create and activate PHENOMENON_MRNA_TRANSFECTION_EFFECTS.
+    //    - This phenomenon will then apply dH/dt changes and trigger other sub-phenomena.
+    // 5. Update scientist state (e.g., cooldown, resource consumption if any).
+    // 6. Update global/regional suspicion.
+
+    // Example: Triggering the phenomenon
+    const effectData: PhenomenonTypes.MrnaTransfectionEffectsData = {
+        deliveryMethod: params.deliveryMethod,
+        dosage: params.dosage,
+        placeboRatio: params.placeboRatio,
+        targetHexId: targetHexId!,
+    };
+    const transfectionPhenomenon = PhenomenonTypes.createMrnaTransfectionEffectsPhenomenon(targetHexId!, effectData, 1);
+    this.phenomenonManager.activatePhenomenon(transfectionPhenomenon);
+  }
+
+  public handleMoveEntityAction(action: IAction): void {
+    const params = action.parameters as ActionTypes.MoveEntityParams;
+    console.log(`GameEngine: Handling MoveEntity ${params.entityId} to ${params.destinationHexId}`);
+    const entity = this.entityManager.getEntity(params.entityId);
+    if (entity) {
+      // TODO: Implement pathfinding (A*) using HexGridManager.
+      // For now, teleport:
+      entity.location = { type: EntityLocationType.HexTile, hexCellId: params.destinationHexId };
+      console.log(`Entity ${params.entityId} moved to ${params.destinationHexId}`);
+    } else {
+      console.warn(`MoveEntityAction: Entity ${params.entityId} not found.`);
+    }
+  }
+
+  public handleHackMediaAction(action: IAction): void {
+    const params = action.parameters as ActionTypes.HackMediaParams;
+    console.log(`GameEngine: Handling HackMedia ${params.mediaOutletId} by ${params.scientistId}`);
+    const mediaOutlet = this.entityManager.getEntity(params.mediaOutletId) as import('./entities').MediaOutletEntity | undefined;
+    if (mediaOutlet) {
+        mediaOutlet.credibility = Math.max(0, mediaOutlet.credibility - 0.1);
+        // Effect: Reduce outlet’s credibility, lower suspicion (0.1 decrease).
+        // This suspicion decrease should apply to the region of the media outlet or globally.
+        const targetHex = this.hexGridManager.getCellById(mediaOutlet.location.hexCellId!);
+        if (targetHex) {
+            const props = (targetHex as HexCell & {shProps: HexTileProperties}).shProps;
+            props.suspicion = Math.max(0, props.suspicion - 0.1);
+            console.log(`Media outlet ${mediaOutlet.name} credibility reduced to ${mediaOutlet.credibility}. Suspicion in ${mediaOutlet.location.hexCellId} reduced.`);
+        }
+    }
+  }
+
+  public handleBribeGovernmentAction(action: IAction): void {
+    const params = action.parameters as ActionTypes.BribeGovernmentParams;
+    console.log(`GameEngine: Handling BribeGovernment in ${params.targetRegionHexId}`);
+    const targetHex = this.hexGridManager.getCellById(params.targetRegionHexId);
+    if (targetHex) {
+        const props = (targetHex as HexCell & {shProps: HexTileProperties}).shProps;
+        props.suspicion = Math.max(0, props.suspicion - 0.2); // Reduce regional suspicion
+         console.log(`Suspicion in ${params.targetRegionHexId} reduced by bribe. New suspicion: ${props.suspicion}`);
+        // Risk whistleblower spawn (5%)
+        if (Math.random() < 0.05) {
+            console.log("Whistleblower spawn risked by bribe!");
+            // TODO: Spawn a whistleblower entity
+            // const wbData: PhenomenonTypes.WhistleblowerLeakSpawnData = { spawnLocationHexId: params.targetRegionHexId, credibilityMinMax: [0.3, 0.7]};
+            // const wbSpawnPhenomenon = createPhenomenon(PHENOMENON_WHISTLEBLOWER_LEAKS, ...);
+            // this.phenomenonManager.activatePhenomenon(wbSpawnPhenomenon);
+        }
+    }
+  }
+
+  public handleFundHospitalAction(action: IAction): void {
+    const params = action.parameters as ActionTypes.FundHospitalParams;
+    console.log(`GameEngine: Handling FundHospital ${params.hospitalId}`);
+    const hospital = this.entityManager.getEntity(params.hospitalId) as import('./entities').HospitalEntity | undefined;
+    if (hospital) {
+        hospital.receiveFunding(params.fundingAmount); // Method on HospitalEntity
+        // Risk ARDS deaths, increase misdiagnoses (handled by hospital logic or new phenomenon)
+        console.log(`Hospital ${hospital.name} funding increased.`);
+         // Risk ARDS deaths (5%) - This could be a phenomenon triggered here
+        if (Math.random() < 0.05) {
+            console.log("ARDS deaths risked by hospital funding!");
+            // const ardsData: PhenomenonTypes.RespiratorInducedArdsData = { targetHexId: hospital.location.hexCellId!, numberOfCases: Math.floor(Math.random() * 5 + 1) };
+            // const ardsPhenomenon = createPhenomenon(PHENOMENON_RESPIRATOR_INDUCED_ARDS, ...);
+            // this.phenomenonManager.activatePhenomenon(ardsPhenomenon);
+        }
+    }
+  }
+
+  public handleSpreadPropagandaAction(action: IAction): void {
+    const params = action.parameters as ActionTypes.SpreadPropagandaParams;
+    console.log(`GameEngine: Handling SpreadPropaganda via ${params.mediaOutletId}`);
+    // Effect: Increase trust (0.1), risk backlash if overused (10%).
+    if (params.scope === 'global') {
+        this.gameState.globalTrust = Math.min(1, this.gameState.globalTrust + 0.1);
+        console.log(`Global trust increased to ${this.gameState.globalTrust}`);
+    } else if (params.scope === 'region' && params.targetHexId) {
+        const targetHex = this.hexGridManager.getCellById(params.targetHexId);
+        if (targetHex) {
+            const props = (targetHex as HexCell & {shProps: HexTileProperties}).shProps;
+            props.trust = Math.min(1, props.trust + 0.1);
+            console.log(`Trust in ${params.targetHexId} increased to ${props.trust}`);
+        }
+    }
+    if (Math.random() < 0.10) {
+        console.log("Propaganda backlash risked!");
+        // TODO: Trigger a backlash phenomenon (e.g., temporary drop in trust or increase in suspicion)
+    }
+  }
+
+  public handleDeployFakeWhistleblowerAction(action: IAction): void {
+    const params = action.parameters as ActionTypes.DeployFakeWhistleblowerParams;
+    console.log(`GameEngine: Handling DeployFakeWhistleblower at ${params.spawnHexId}`);
+    // TODO: Create a "fake" WhistleblowerEntity or a special event.
+    // Effect: Distract from real leaks, reduce suspicion (0.1), risk exposure (10%).
+    const targetHex = this.hexGridManager.getCellById(params.spawnHexId);
+    if (targetHex) {
+        const props = (targetHex as HexCell & {shProps: HexTileProperties}).shProps;
+        props.suspicion = Math.max(0, props.suspicion - 0.1);
+        console.log(`Suspicion in ${params.spawnHexId} reduced by fake whistleblower. New suspicion: ${props.suspicion}`);
+    }
+    if (Math.random() < 0.10) {
+        this.gameState.globalPlayerExposure = Math.min(1, this.gameState.globalPlayerExposure + 0.1);
+        console.log(`Player exposure increased due to fake whistleblower! Exposure: ${this.gameState.globalPlayerExposure}`);
+    }
+  }
+
+  // Phenomenon Update Handler
+  public handlePhenomenonUpdate(phenomenon: IPhenomenon, deltaTime: number): void {
+    // console.log(`GameEngine: Updating phenomenon ${phenomenon.name} (ID: ${phenomenon.id})`);
+    const scaledDeltaTime = deltaTime * this.gameState.speed;
+
+    switch (phenomenon.type) {
+        case PhenomenonTypes.PHENOMENON_MRNA_TRANSFECTION_EFFECTS:
+            const data = phenomenon.parameters as PhenomenonTypes.MrnaTransfectionEffectsData;
+            const targetHexId = (phenomenon as any).targetId as string;
+            const cell = this.hexGridManager.getCellById(targetHexId);
+            if (cell) {
+                const props = (cell as HexCell & {shProps: HexTileProperties}).shProps;
+                if (props) {
+                    // dH/dt = -k1*DoseVal + k2*PlaceboRatio - k3*SideEffectsMagnitude
+                    // Simplified for now:
+                    let doseEffectiveness = 0.1; // Base
+                    if(data.deliveryMethod === 'nanoparticles') doseEffectiveness *= 1.2;
+                    if(data.deliveryMethod === 'viral_vectors') doseEffectiveness *= 1.5;
+
+                    let dosageMultiplier = 0.5; // low
+                    if(data.dosage === 'medium') dosageMultiplier = 1.0;
+                    if(data.dosage === 'high') dosageMultiplier = 1.5;
+
+                    const intendedHealthChange = doseEffectiveness * dosageMultiplier * (1 - data.placeboRatio) * 0.1; // Max 0.1 health increase from one shot
+                    const sideEffectMagnitude = dosageMultiplier * (data.deliveryMethod === 'aerosols' ? 0.2 : 0.1); // Aerosols riskier
+
+                    props.health = Math.max(0, Math.min(1, props.health + intendedHealthChange - sideEffectMagnitude * 0.05));
+                    props.suspicion = Math.min(1, props.suspicion + sideEffectMagnitude * 0.02);
+                    this.gameState.globalPlayerExposure = Math.min(1, this.gameState.globalPlayerExposure + sideEffectMagnitude * 0.001);
+
+                    // console.log(`Hex ${targetHexId} health: ${props.health.toFixed(3)}, suspicion: ${props.suspicion.toFixed(3)} due to experiment.`);
+
+                    // TODO: Trigger indirect effects based on probability (Sexual Trans, Fertility, Reverse Transcriptase)
+                    // These would spawn new phenomena or directly modify properties.
+                }
+            }
+            phenomenon.isActive = false; // Typically, transfection effects are instantaneous after duration.
+            break;
+
+        case PhenomenonTypes.PHENOMENON_RIOTS:
+            const riotData = phenomenon.parameters as PhenomenonTypes.RiotsData;
+            const riotHex = this.hexGridManager.getCellById(riotData.targetHexId);
+            if (riotHex) {
+                const props = (riotHex as HexCell & {shProps: HexTileProperties}).shProps;
+                if (props) {
+                    props.population *= (1 - (riotData.intensity * 0.01 * scaledDeltaTime) ); // Lose 0.01 of intensity % pop per sec
+                    props.infrastructure = Math.max(0, props.infrastructure - riotData.intensity * 0.005 * scaledDeltaTime);
+                    props.suspicion = Math.min(1, props.suspicion + riotData.intensity * 0.01 * scaledDeltaTime);
+                    // console.log(`Riots in ${riotData.targetHexId}: Pop ${props.population.toFixed(0)}, Infra ${props.infrastructure.toFixed(3)}`);
+                }
+            }
+            break;
+
+        // Continuous phenomena like TrustDecay, Depopulation are handled in PhenomenonManager.checkAndTriggerPhenomena for now.
+        // If they needed more complex state or distinct instances, they could be handled here too.
+
+        default:
+            // console.warn(`Unhandled phenomenon type in GameEngine.handlePhenomenonUpdate: ${phenomenon.type}`);
+            break;
+    }
   }
 }

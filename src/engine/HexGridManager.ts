@@ -16,10 +16,12 @@ export interface HexCell {
     neighborIds: string[];
 
     // Game data
-    biomeId?: string;
-    // Later: resourceDistribution: Map<string, number>;
-    controllingFactionId?: string;
+    // biomeId?: string; // Replaced by shProps
+    // controllingFactionId?: string; // Replaced by shProps or managed dynamically
     entitiesInCell: string[]; // IDs of entities within this cell
+
+    // Silent Helix specific properties
+    shProps?: import('./GameEngine').HexTileProperties; // Properties for Silent Helix
 
     // Visual representation (optional, could be managed separately)
     mesh?: THREE.Mesh | THREE.LineLoop;

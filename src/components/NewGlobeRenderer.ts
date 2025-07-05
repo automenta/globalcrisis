@@ -1,18 +1,52 @@
 import * as THREE from 'three';
 import SimplexNoise from 'simplex-noise';
-import { GameState, WorldRegion, RegionEvent, EventType, Faction, Ideology, WeatherCondition, Biome, IEntity, PhysicsLayer } from '../engine/GameEngine'; // Assuming GameEngine types are needed
+// Updated GameEngine import to reflect new structure
+import {
+    GameState,
+    IEntity,
+    EntityLocationType,
+    HexTileProperties,
+    MetamodelType
+} from '../engine/GameEngine';
 import { HexGridManager, HexCell } from '../engine/HexGridManager';
+// Silent Helix specific entities
+import {
+    ScientistEntity,
+    DroneEntity,
+    MediaOutletEntity,
+    HospitalEntity,
+    WhistleblowerEntity
+} from '../engine/entities';
+
+// Legacy entity imports (to be removed or adapted if their components are reused)
 import { SatelliteEntity, ISatelliteDataComponent, DEFAULT_SATELLITE_DATA_COMPONENT_NAME, SatelliteType } from '../engine/entities/SatelliteEntity';
 import { ITransformComponent, DEFAULT_TRANSFORM_COMPONENT_NAME } from '../engine/components/TransformComponent';
-import { IHealthComponent } from '../engine/components/HealthComponent';
+import { IHealthComponent } from '../engine/components/HealthComponent'; // May be reused for SH entities if they adopt components
 import { IPhysicsPropertiesComponent, DEFAULT_PHYSICS_PROPERTIES_COMPONENT_NAME } from '../engine/components/PhysicsPropertiesComponent';
-import { PHYSICS_TO_VISUAL_SCALE, VectorOps, EARTH_RADIUS_METERS } from '../engine/PhysicsManager';
-import { CityEntity } from '../engine/entities/CityEntity';
-import { FactoryEntity } from '../engine/entities/FactoryEntity';
+import { PHYSICS_TO_VISUAL_SCALE, VectorOps, EARTH_RADIUS_METERS } from '../engine/PhysicsManager'; // Keep for physics scale if needed
+import { CityEntity } from '../engine/entities/CityEntity'; // Legacy
+import { FactoryEntity } from '../engine/entities/FactoryEntity'; // Legacy
 
 
 const VISUAL_EARTH_RADIUS = 2;
+// ENTITY_VISUAL_SCALE can be adjusted for Silent Helix entities
 const ENTITY_VISUAL_SCALE = 0.05;
+
+// Helper for randomizing pulse animation per cell
+interface String {
+    hashCode(): number;
+}
+String.prototype.hashCode = function() {
+    var hash = 0, i, chr;
+    if (this.length === 0) return hash;
+    for (i = 0; i < this.length; i++) {
+        chr = this.charCodeAt(i);
+        hash = ((hash << 5) - hash) + chr;
+        hash |= 0; // Convert to 32bit integer
+    }
+    return hash;
+};
+
 
 export interface NewGlobeRendererCallbacks {
     onHexCellClick?: (cell: HexCell, event: MouseEvent) => void;
@@ -432,7 +466,9 @@ export class NewGlobeRenderer {
             geometry.setIndex(indices);
             geometry.computeVertexNormals();
 
-            const hexMesh = new THREE.Mesh(geometry, defaultHexMaterial.clone());
+            // Each hex mesh gets its own material instance initially.
+            // This will be updated dynamically in updateCurrentGameState.
+            const hexMesh = new THREE.Mesh(geometry, this.defaultHexMaterial.clone());
             hexMesh.name = `HexCell_${cell.id}`;
             hexMesh.userData = { cellId: cell.id, type: 'hex_cell', cellRef: cell };
 
@@ -440,55 +476,69 @@ export class NewGlobeRenderer {
             this.hexCellMeshes.set(cell.id, hexMesh);
 
             const outlineGeometry = new THREE.BufferGeometry().setFromPoints([...slightlyElevatedVertices, slightlyElevatedVertices[0]]);
-            const outline = new THREE.LineLoop(outlineGeometry, outlineMaterial.clone());
+            const outline = new THREE.LineLoop(outlineGeometry, outlineMaterial.clone()); // Clone outline material too
             outline.name = `HexOutline_${cell.id}`;
             hexMesh.add(outline);
         });
         console.log(`[NewGlobeRenderer] Created visuals for ${this.hexCellMeshes.size} hex cells.`);
     }
 
-    public styleHexCell(cellId: string, newMaterial?: THREE.Material, newOutlineColor?: THREE.Color, isSelected?: boolean): void {
+    // styleHexCell is used for selection highlighting and dynamic updates based on SH properties
+    public styleHexCell(
+        cellId: string,
+        baseMaterial?: THREE.Material, // Material based on faction/biome/default
+        pulseColor?: THREE.Color,      // For trust/suspicion pulsing
+        pulseIntensity: number = 0,    // 0 to 1 for pulsing effect
+        isSelected?: boolean
+    ): void {
         const hexMesh = this.hexCellMeshes.get(cellId);
-        if (hexMesh) {
-            let materialToApply = newMaterial; // This will now typically be a cached material or default/selected
-            if (isSelected) {
-                materialToApply = this.selectedHexMaterial;
-            } else if (!newMaterial) { // Should only happen if no faction/biome and not selected
-                materialToApply = this.defaultHexMaterial;
+        if (!hexMesh || !(hexMesh.material instanceof THREE.MeshBasicMaterial)) return;
+
+        let targetMaterial = baseMaterial || this.defaultHexMaterial;
+        if (isSelected) {
+            targetMaterial = this.selectedHexMaterial;
+        }
+
+        // Apply base material if different
+        if (hexMesh.material.uuid !== targetMaterial.uuid) {
+            hexMesh.material = targetMaterial;
+        }
+
+        // Pulsing effect: Modulate color and opacity
+        if (pulseColor && pulseIntensity > 0 && !isSelected) {
+            const baseColor = (targetMaterial as THREE.MeshBasicMaterial).color.clone();
+            const finalColor = baseColor.lerp(pulseColor, pulseIntensity * 0.7); // Don't fully override
+
+            // Ensure the material is a unique instance for this cell if pulsing
+            if (!hexMesh.userData.isPulsingMaterialUnique) {
+                 hexMesh.material = (hexMesh.material as THREE.MeshBasicMaterial).clone();
+                 hexMesh.userData.isPulsingMaterialUnique = true;
             }
 
-            if (materialToApply && hexMesh.material !== materialToApply) {
-                // We no longer dispose hexMesh.material here, as it might be a cached material.
-                // Disposal of cached materials is handled in the main dispose() method.
-                hexMesh.material = materialToApply;
+            (hexMesh.material as THREE.MeshBasicMaterial).color.set(finalColor);
+            // Opacity can also be pulsed, e.g., base opacity + pulseIntensity * some_factor
+            (hexMesh.material as THREE.MeshBasicMaterial).opacity = (targetMaterial as THREE.MeshBasicMaterial).opacity + pulseIntensity * 0.2;
+        } else if (hexMesh.userData.isPulsingMaterialUnique && !isSelected) {
+            // Revert to shared material if no longer pulsing and not selected
+            hexMesh.material = targetMaterial; // Re-assign to the shared instance
+            hexMesh.userData.isPulsingMaterialUnique = false;
+        }
+
+
+        const outline = hexMesh.children.find(c => c instanceof THREE.LineLoop) as THREE.LineLoop;
+        if (outline && outline.material instanceof THREE.LineBasicMaterial) {
+            const newOutlineColor = isSelected ? new THREE.Color(0xffcc00) : (pulseColor || new THREE.Color(0x888888));
+            const newOpacity = isSelected ? 0.9 : (pulseIntensity > 0 ? 0.5 + pulseIntensity * 0.4 : 0.3);
+
+            if (outline.material.color.getHex() !== newOutlineColor.getHex()) {
+                outline.material.color.set(newOutlineColor);
             }
-            // (hexMesh.material as THREE.Material).needsUpdate = true; // Not strictly needed if we are swapping instances.
-
-            const outline = hexMesh.children.find(c => c instanceof THREE.LineLoop) as THREE.LineLoop;
-            if (outline && outline.material instanceof THREE.LineBasicMaterial) {
-                const baseOutlineColor = newOutlineColor ? newOutlineColor.clone() : new THREE.Color(0x888888); // Default outline
-                const finalOutlineColor = isSelected ? new THREE.Color(0xffcc00) : baseOutlineColor;
-
-                let finalOpacity = 0.3; // Default for non-selected, non-faction, non-biome
-                if (isSelected) {
-                    finalOpacity = 0.9;
-                } else if (newMaterial === this.factionMaterialsCache.get(`${baseOutlineColor.getHexString()}_0.45`)) { // Check if it's a faction material
-                    finalOpacity = 0.7;
-                } else if (newMaterial !== this.defaultHexMaterial) { // Assumed biome material if not default and not faction
-                    finalOpacity = 0.5;
-                }
-
-
-                if (outline.material.color.getHex() !== finalOutlineColor.getHex()) {
-                    outline.material.color.set(finalOutlineColor);
-                }
-                if (outline.material.opacity !== finalOpacity) {
-                    outline.material.opacity = finalOpacity;
-                }
-                // outline.material.needsUpdate = true; // Only if properties of existing material changed.
+            if (outline.material.opacity !== newOpacity) {
+                outline.material.opacity = newOpacity;
             }
         }
     }
+
 
     public updateCurrentGameState(gameState: GameState): void {
         this.currentGameState = gameState;
@@ -510,126 +560,51 @@ export class NewGlobeRenderer {
         });
 
         if (this.currentGameState) {
-            const defaultMaterial = this.defaultHexMaterial;
-            const defaultOutlineColor = new THREE.Color(0x888888);
-
             this.hexGridManager.cells.forEach(cell => {
-                let targetMaterial: THREE.Material = defaultMaterial;
-                let targetOutlineColor = defaultOutlineColor.clone();
-
-                // Placeholder for accessing faction control data for a hex cell.
-                // This needs to be correctly sourced from GameState, for example:
-                // const cellDetails = this.currentGameState!.hexCellData?.get(cell.id); // Future data source
-                const cellOwnerFactionId = cell.controllingFactionId; // Use directly from HexCell
-                const cellBiomeId = cell.biomeId; // Use directly from HexCell
-
-                let factionMaterial: THREE.MeshBasicMaterial | undefined = undefined;
-                let biomeMaterial: THREE.MeshBasicMaterial | undefined = undefined;
-
-                if (cellOwnerFactionId) {
-                    const faction = this.currentGameState!.factions.get(cellOwnerFactionId);
-                    if (faction && faction.color) {
-                        const color = new THREE.Color(faction.color);
-                        const factionColorKey = `${color.getHexString()}_${0.45}`;
-                        if (this.factionMaterialsCache.has(factionColorKey)) {
-                            factionMaterial = this.factionMaterialsCache.get(factionColorKey)!;
-                        } else {
-                            factionMaterial = new THREE.MeshBasicMaterial({
-                                color: color,
-                                transparent: true,
-                                opacity: 0.45,
-                                side: THREE.DoubleSide,
-                            });
-                            this.factionMaterialsCache.set(factionColorKey, factionMaterial);
-                        }
-                        targetOutlineColor.set(color); // Use full color for outline base, opacity handles intensity
-                    }
-                }
-
-                if (cellBiomeId && this.currentGameState.biomes.has(cellBiomeId)) {
-                    let biomeColorValue = 0x555555; // Default unknown biome color hex value
-                    if (cellBiomeId.includes('forest')) biomeColorValue = 0x228B22;
-                    else if (cellBiomeId.includes('mountain')) biomeColorValue = 0x808080;
-                    else if (cellBiomeId.includes('desert')) biomeColorValue = 0xF4A460;
-                    else if (cellBiomeId.includes('ocean') || cellBiomeId.includes('water')) biomeColorValue = 0x1E90FF;
-                    else if (cellBiomeId.includes('plains')) biomeColorValue = 0x90EE90;
-                    else if (cellBiomeId.includes('tundra')) biomeColorValue = 0xADD8E6;
-
-                    const biomeColorKey = `${biomeColorValue.toString(16).padStart(6, '0')}_${0.25}`;
-                    if (this.biomeMaterialsCache.has(biomeColorKey)) {
-                        biomeMaterial = this.biomeMaterialsCache.get(biomeColorKey)!;
-                    } else {
-                        biomeMaterial = new THREE.MeshBasicMaterial({
-                            color: new THREE.Color(biomeColorValue),
-                            transparent: true,
-                            opacity: 0.25,
-                            side: THREE.DoubleSide,
-                        });
-                        this.biomeMaterialsCache.set(biomeColorKey, biomeMaterial);
-                    }
-                }
-
-                // Layering: Faction > Biome > Default
-                if (factionMaterial) {
-                    targetMaterial = factionMaterial;
-                } else if (biomeMaterial) {
-                    targetMaterial = biomeMaterial;
-                     // If only biome color, outline can reflect biome or be default
-                    if (targetMaterial instanceof THREE.MeshBasicMaterial) {
-                         targetOutlineColor.copy(targetMaterial.color).multiplyScalar(0.8);
-                    }
-                } else {
-                    targetMaterial = defaultMaterial; // Already default if nothing else
-                    targetOutlineColor.set(0x888888); // Reset to default outline if no faction/biome
-                }
-
-
                 const hexMesh = this.hexCellMeshes.get(cell.id);
-                if (hexMesh) {
-                    if (this.selectedHexId === cell.id) {
-                        this.styleHexCell(cell.id, undefined, undefined, true); // Selection overrides other styles
-                    } else {
-                        let currentMaterial = hexMesh.material as THREE.MeshBasicMaterial;
-                        let currentOutline = hexMesh.children.find(c => c instanceof THREE.LineLoop) as THREE.LineLoop;
-                        let needsStyleUpdate = false;
+                if (!hexMesh) return;
 
-                        // Check if material needs update (UUID check for cached materials)
-                        if (currentMaterial.uuid !== targetMaterial.uuid) { // Swapping to a different material instance
-                           needsStyleUpdate = true;
-                        }
+                const shProps = (cell as HexCell & {shProps?: HexTileProperties}).shProps;
+                let baseMaterial = this.defaultHexMaterial;
+                let pulseColor: THREE.Color | undefined = undefined;
+                let pulseIntensity = 0;
 
-                        // Determine the correct outline color and opacity for comparison
-                        let expectedOutlineColorHex = defaultOutlineColor.getHex();
-                        let expectedOutlineOpacity = 0.3; // Default for default/biome outline
-
-                        if (this.selectedHexId === cell.id) {
-                            expectedOutlineColorHex = this.selectedHexMaterial.color.getHex();
-                            expectedOutlineOpacity = 0.9;
-                        } else if (factionMaterial) {
-                            expectedOutlineColorHex = targetOutlineColor.getHex(); // targetOutlineColor was set by faction
-                            expectedOutlineOpacity = 0.7;
-                        } else if (biomeMaterial) {
-                            expectedOutlineColorHex = targetOutlineColor.getHex(); // targetOutlineColor was set by biome
-                            expectedOutlineOpacity = 0.5;
-                        }
-                        // else it uses defaultOutlineColor and default opacity 0.3
-
-                        if (currentOutline && currentOutline.material instanceof THREE.LineBasicMaterial) {
-                            if (currentOutline.material.color.getHex() !== expectedOutlineColorHex ||
-                                currentOutline.material.opacity !== expectedOutlineOpacity ) {
-                                needsStyleUpdate = true;
-                            }
-                        }
-
-                        if (needsStyleUpdate) {
-                             // Pass the material itself, not a new one, if it's from cache
-                             this.styleHexCell(cell.id, targetMaterial, new THREE.Color(expectedOutlineColorHex), this.selectedHexId === cell.id);
-                        }
+                if (shProps) {
+                    // Determine pulse color and intensity based on trust/suspicion
+                    // Green for trust, Red for suspicion. Stronger color for higher value.
+                    if (shProps.trust > shProps.suspicion && shProps.trust > 0.5) {
+                        pulseColor = new THREE.Color(0x00ff00); // Green for trust
+                        pulseIntensity = (shProps.trust - 0.5) * 2; // Scale 0.5-1.0 trust to 0-1 intensity
+                    } else if (shProps.suspicion > shProps.trust && shProps.suspicion > 0.3) {
+                        pulseColor = new THREE.Color(0xff0000); // Red for suspicion
+                        pulseIntensity = (shProps.suspicion - 0.3) * 1.4; // Scale 0.3-1.0 suspicion to 0-1 intensity (approx)
                     }
+                    pulseIntensity = Math.min(1, Math.max(0, pulseIntensity)) * (0.3 + Math.sin(Date.now() * 0.005 + cell.id.hashCode()) * 0.2); // Sinusoidal pulse
                 }
+
+                // Faction coloring (simplified, assuming player faction has a color)
+                // This part can be expanded if multiple factions control hexes.
+                // For now, let's assume player faction color if a hex is highly controlled.
+                const playerFaction = this.currentGameState.factions.get('player_consortium');
+                if (playerFaction && playerFaction.color && shProps && shProps.trust > 0.8) { // Example: player control
+                     const factionColorKey = `${playerFaction.color}_${0.45}`; // Opacity for faction layer
+                     if (this.factionMaterialsCache.has(factionColorKey)) {
+                        baseMaterial = this.factionMaterialsCache.get(factionColorKey)!;
+                     } else {
+                        const newFactionMaterial = new THREE.MeshBasicMaterial({
+                            color: new THREE.Color(playerFaction.color),
+                            transparent: true, opacity: 0.45, side: THREE.DoubleSide,
+                        });
+                        this.factionMaterialsCache.set(factionColorKey, newFactionMaterial);
+                        baseMaterial = newFactionMaterial;
+                     }
+                }
+
+                this.styleHexCell(cell.id, baseMaterial, pulseColor, pulseIntensity, this.selectedHexId === cell.id);
             });
         }
     }
+
 
     private getOrCreateEntityVisual(entity: IEntity): THREE.Object3D | null {
         if (this.entityVisuals.has(entity.id)) {
@@ -637,7 +612,24 @@ export class NewGlobeRenderer {
         }
 
         let newVisual: THREE.Object3D | null = null;
-        switch (entity.entityType) {
+        // Use entity.type (MetamodelType) for Silent Helix entities
+        switch (entity.type) {
+            case 'scientist':
+                newVisual = this.createScientistVisual(entity as ScientistEntity);
+                break;
+            case 'drone':
+                newVisual = this.createDroneVisual(entity as DroneEntity);
+                break;
+            case 'media_outlet':
+                newVisual = this.createMediaOutletVisual(entity as MediaOutletEntity);
+                break;
+            case 'hospital':
+                newVisual = this.createHospitalVisual(entity as HospitalEntity);
+                break;
+            case 'whistleblower':
+                newVisual = this.createWhistleblowerVisual(entity as WhistleblowerEntity);
+                break;
+            // Legacy entity types (can be removed if not used)
             case 'SatelliteEntity':
                 newVisual = this.createSatelliteVisual(entity as SatelliteEntity);
                 break;
@@ -647,64 +639,87 @@ export class NewGlobeRenderer {
             case 'FactoryEntity':
                 newVisual = this.createFactoryVisual(entity as FactoryEntity);
                 break;
-            case 'InfantryUnitEntity':
-                newVisual = this.createGroundUnitVisual(entity as IEntity, 'infantry');
+            case 'InfantryUnitEntity': // Legacy
+                newVisual = this.createGroundUnitVisual(entity, 'infantry');
                 break;
             default:
-                if (entity.location.layer === PhysicsLayer.Air) {
+                // Check for legacy entityType if entity.type is not specific enough
+                const legacyEntityType = (entity as any).entityType;
+                if (legacyEntityType === 'GenericAirUnit') { // Example for adapting old types
                     newVisual = this.createAirUnitVisual(entity);
-                } else if (entity.location.layer === PhysicsLayer.Underground) {
-                    newVisual = this.createUndergroundUnitVisual(entity);
-                } else if (entity.entityType === 'GenericSeaUnit') {
+                } else if (legacyEntityType === 'GenericSeaUnit') {
                     newVisual = this.createSeaUnitVisual(entity);
+                } else {
+                    console.warn(`No visual creation logic for entity type: ${entity.type || legacyEntityType}`);
                 }
                 break;
         }
 
         if (newVisual) {
-            newVisual.userData = { entityId: entity.id, entityType: entity.entityType, entityRef: entity, type: 'entity_visual' };
+            // Use entity.type for Silent Helix
+            newVisual.userData = { entityId: entity.id, entityType: entity.type, entityRef: entity, type: 'entity_visual' };
 
-            const statusIndicatorSprite = this.createStatusIndicator(entity);
-            if (statusIndicatorSprite) {
-                newVisual.add(statusIndicatorSprite);
-            }
+            // Simplified status indicator (e.g. a small dot above the entity)
+            // Full health bar might be overkill or depend on specific SH entity properties
+            // const statusIndicatorSprite = this.createStatusIndicator(entity);
+            // if (statusIndicatorSprite) {
+            //     newVisual.add(statusIndicatorSprite);
+            // }
 
             this.entityVisuals.set(entity.id, newVisual);
             this.scene.add(newVisual);
+
+            // Set initial position for surface entities
+            if (entity.location.type === EntityLocationType.HexTile && entity.location.hexCellId) {
+                const cell = this.hexGridManager.getCellById(entity.location.hexCellId);
+                if (cell) {
+                    newVisual.position.copy(cell.centerPointWorld.clone().normalize().multiplyScalar(VISUAL_EARTH_RADIUS + ENTITY_VISUAL_SCALE * 0.1)); // Slightly above surface
+                    const surfaceNormal = cell.centerPointWorld.clone().normalize();
+                    newVisual.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), surfaceNormal);
+                }
+            }
             return newVisual;
         }
         return null;
     }
 
     private updateEntityVisual(visual: THREE.Object3D, entity: IEntity, gameState: GameState): void {
-        const transformComp = entity.getComponent<ITransformComponent>(DEFAULT_TRANSFORM_COMPONENT_NAME);
-        if (transformComp) {
-            const visualPosition = VectorOps.scale(transformComp.positionMeters, PHYSICS_TO_VISUAL_SCALE);
-            visual.position.copy(visualPosition);
-        }
+        // Update position for mobile entities based on entity.location
+        if (entity.location.type === EntityLocationType.HexTile && entity.location.hexCellId) {
+            const cell = this.hexGridManager.getCellById(entity.location.hexCellId);
+            if (cell) {
+                const targetPosition = cell.centerPointWorld.clone().normalize().multiplyScalar(VISUAL_EARTH_RADIUS + ENTITY_VISUAL_SCALE * 0.1);
+                // Lerp for smooth movement if desired, or direct set
+                visual.position.lerp(targetPosition, 0.1);
 
-        switch (entity.entityType) {
+                const surfaceNormal = cell.centerPointWorld.clone().normalize();
+                const up = new THREE.Vector3(0,1,0);
+                visual.quaternion.setFromUnitVectors(up, surfaceNormal);
+
+            }
+        }
+        // else if entity.location.type === EntityLocationType.Global, position might be fixed or handled differently.
+
+        // Call type-specific update logic
+        switch (entity.type) {
+            case 'scientist':
+                this.updateScientistVisual(visual, entity as ScientistEntity, gameState);
+                break;
+            case 'drone':
+                this.updateDroneVisual(visual, entity as DroneEntity, gameState);
+                break;
+            // Other Silent Helix entity types...
+
+            // Legacy
             case 'SatelliteEntity':
-                this.updateSatelliteVisual(visual, entity as SatelliteEntity, transformComp);
+                const transformCompSat = entity.getComponent<ITransformComponent>(DEFAULT_TRANSFORM_COMPONENT_NAME);
+                this.updateSatelliteVisual(visual, entity as SatelliteEntity, transformCompSat);
                 break;
             case 'CityEntity':
-                this.updateCityVisual(visual, entity as CityEntity, transformComp, gameState);
+                 const transformCompCity = entity.getComponent<ITransformComponent>(DEFAULT_TRANSFORM_COMPONENT_NAME);
+                this.updateCityVisual(visual, entity as CityEntity, transformCompCity, gameState);
                 break;
-            case 'FactoryEntity':
-                this.updateFactoryVisual(visual, entity as FactoryEntity, transformComp, gameState);
-                break;
-            case 'InfantryUnitEntity':
-                this.updateGroundUnitVisual(visual, entity as IEntity, transformComp, gameState, 'infantry');
-                break;
-            default:
-                if (entity.location.layer === PhysicsLayer.Air) {
-                    this.updateAirUnitVisual(visual, entity, transformComp, gameState);
-                } else if (entity.location.layer === PhysicsLayer.Underground) {
-                    this.updateUndergroundUnitVisual(visual, entity, transformComp, gameState);
-                } else if (entity.entityType === 'GenericSeaUnit') {
-                    this.updateSeaUnitVisual(visual, entity, transformComp, gameState);
-                }
-                break;
+            // ... other legacy types
         }
 
         const statusIndicator = visual.children.find(child => child.userData.isStatusIndicator) as THREE.Sprite;
@@ -1034,6 +1049,84 @@ export class NewGlobeRenderer {
         }
     }
 
+    // Placeholder visual creation methods for Silent Helix Entities
+    private createScientistVisual(entity: ScientistEntity): THREE.Object3D {
+        const group = new THREE.Group();
+        const color = entity.allegiance === 'rogue' ? 0xffa500 : 0x00ddff; // Orange for rogue, cyan for consortium
+        const geom = new THREE.CapsuleGeometry(ENTITY_VISUAL_SCALE * 0.2, ENTITY_VISUAL_SCALE * 0.5, 4, 8);
+        const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.1 });
+        const mesh = new THREE.Mesh(geom, mat);
+        mesh.position.y = ENTITY_VISUAL_SCALE * 0.25;
+        group.add(mesh);
+        group.name = `Scientist_${entity.id}`;
+        return group;
+    }
+
+    private createDroneVisual(entity: DroneEntity): THREE.Object3D {
+        const group = new THREE.Group();
+        const color = entity.factionId === 'player_consortium' ? 0x00ff00 : 0x888888; // Green for player
+        const geom = new THREE.SphereGeometry(ENTITY_VISUAL_SCALE * 0.3, 8, 6);
+        const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.6 });
+        const mesh = new THREE.Mesh(geom, mat);
+        // Add small "wings" or "propellers"
+        const wingGeom = new THREE.BoxGeometry(ENTITY_VISUAL_SCALE * 0.8, ENTITY_VISUAL_SCALE * 0.1, ENTITY_VISUAL_SCALE * 0.2);
+        const wingMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
+        const wing1 = new THREE.Mesh(wingGeom, wingMat);
+        wing1.position.x = ENTITY_VISUAL_SCALE * 0.3;
+        const wing2 = wing1.clone();
+        wing2.position.x = -ENTITY_VISUAL_SCALE * 0.3;
+        group.add(mesh, wing1, wing2);
+        group.name = `Drone_${entity.id}`;
+        return group;
+    }
+
+    private createMediaOutletVisual(entity: MediaOutletEntity): THREE.Object3D {
+        const group = new THREE.Group();
+        let color = 0xcccccc; // Neutral default
+        if (entity.bias === 'pro-consortium') color = 0x4488ff; // Blueish
+        else if (entity.bias === 'anti-consortium') color = 0xff8844; // Orangish
+        const geom = new THREE.BoxGeometry(ENTITY_VISUAL_SCALE * 0.6, ENTITY_VISUAL_SCALE * 0.8, ENTITY_VISUAL_SCALE * 0.6);
+        const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.1 });
+        const mesh = new THREE.Mesh(geom, mat);
+        // Add a small "antenna"
+        const antennaGeom = new THREE.CylinderGeometry(ENTITY_VISUAL_SCALE*0.05, ENTITY_VISUAL_SCALE*0.05, ENTITY_VISUAL_SCALE*0.5, 6);
+        const antennaMat = new THREE.MeshStandardMaterial({color: 0x777777});
+        const antenna = new THREE.Mesh(antennaGeom, antennaMat);
+        antenna.position.y = ENTITY_VISUAL_SCALE * 0.65;
+        group.add(mesh, antenna);
+        group.name = `MediaOutlet_${entity.id}`;
+        return group;
+    }
+
+    private createHospitalVisual(entity: HospitalEntity): THREE.Object3D {
+        const group = new THREE.Group();
+        const color = 0xffffff; // White
+        const baseGeom = new THREE.BoxGeometry(ENTITY_VISUAL_SCALE * 0.7, ENTITY_VISUAL_SCALE * 0.5, ENTITY_VISUAL_SCALE * 0.7);
+        const baseMat = new THREE.MeshStandardMaterial({ color, roughness: 0.8, metalness: 0.1 });
+        const baseMesh = new THREE.Mesh(baseGeom, baseMat);
+        // Add a red cross symbol (simplified as a small red box)
+        const crossGeom = new THREE.BoxGeometry(ENTITY_VISUAL_SCALE*0.2, ENTITY_VISUAL_SCALE*0.2, ENTITY_VISUAL_SCALE*0.05);
+        const crossMat = new THREE.MeshStandardMaterial({color: 0xff0000});
+        const crossMesh = new THREE.Mesh(crossGeom, crossMat);
+        crossMesh.position.set(0, ENTITY_VISUAL_SCALE*0.15, ENTITY_VISUAL_SCALE*0.36);
+        group.add(baseMesh, crossMesh);
+        group.name = `Hospital_${entity.id}`;
+        return group;
+    }
+
+    private createWhistleblowerVisual(entity: WhistleblowerEntity): THREE.Object3D {
+        const group = new THREE.Group();
+        const color = 0xffdd00; // Yellow/gold
+        const geom = new THREE.ConeGeometry(ENTITY_VISUAL_SCALE * 0.2, ENTITY_VISUAL_SCALE * 0.6, 8);
+        const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.2 });
+        const mesh = new THREE.Mesh(geom, mat);
+        mesh.position.y = ENTITY_VISUAL_SCALE * 0.3;
+        group.add(mesh);
+        group.name = `Whistleblower_${entity.id}`;
+        return group;
+    }
+
+
     private createAirUnitVisual(entity: IEntity): THREE.Object3D {
         const group = new THREE.Group();
         const factionColor = entity.factionId && this.currentGameState?.factions.has(entity.factionId)
@@ -1127,6 +1220,86 @@ export class NewGlobeRenderer {
             }
         }
     }
+
+    // Placeholder update visual methods for Silent Helix Entities
+    private updateScientistVisual(visual: THREE.Object3D, entity: ScientistEntity, gameState: GameState): void {
+        // Scientist color might change based on allegiance or status
+        const newColor = entity.allegiance === 'rogue' ? 0xffa500 : 0x00ddff;
+        const bodyMesh = visual.children[0] as THREE.Mesh; // Assuming first child is the main mesh
+        if (bodyMesh && bodyMesh.material instanceof THREE.MeshStandardMaterial) {
+            if (bodyMesh.material.color.getHex() !== newColor) {
+                bodyMesh.material.color.setHex(newColor);
+            }
+        }
+        // TODO: Add animation if moving, or particles if performing action
+    }
+
+    private updateDroneVisual(visual: THREE.Object3D, entity: DroneEntity, gameState: GameState): void {
+        // TODO: Rotate "propellers", show payload status, visual effect when scouting/delivering
+        const bodyMesh = visual.children.find(c => c instanceof THREE.Mesh && c.geometry instanceof THREE.SphereGeometry) as THREE.Mesh;
+        if (bodyMesh && bodyMesh.material instanceof THREE.MeshStandardMaterial) {
+            // Example: make drone pulse if it has important payload
+            if (entity.currentPayload && entity.currentPayload.length > 0) {
+                const pulseFactor = Math.sin(Date.now() * 0.01) * 0.2 + 0.8;
+                bodyMesh.material.color.setScalar(pulseFactor); // Simple pulse effect on brightness
+            } else {
+                 const baseColor = entity.factionId === 'player_consortium' ? 0x00ff00 : 0x888888;
+                 if (bodyMesh.material.color.getHex() !== baseColor) bodyMesh.material.color.setHex(baseColor);
+            }
+        }
+    }
+
+    private updateMediaOutletVisual(visual: THREE.Object3D, entity: MediaOutletEntity, gameState: GameState): void {
+        // Change color based on credibility or if recently hacked
+        const bodyMesh = visual.children.find(c => c instanceof THREE.Mesh && c.geometry instanceof THREE.BoxGeometry) as THREE.Mesh;
+        if (bodyMesh && bodyMesh.material instanceof THREE.MeshStandardMaterial) {
+            let targetColorHex = 0xcccccc; // Neutral default
+            if (entity.bias === 'pro-consortium') targetColorHex = 0x4488ff;
+            else if (entity.bias === 'anti-consortium') targetColorHex = 0xff8844;
+
+            // If low credibility, make it appear dimmer or "glitchy"
+            if (entity.credibility < 0.3) {
+                const dimFactor = 0.5 + entity.credibility / 0.3 * 0.5; // Scale 0-0.3 credibility to 0.5-1.0 dimFactor
+                const tempColor = new THREE.Color(targetColorHex);
+                tempColor.multiplyScalar(dimFactor);
+                targetColorHex = tempColor.getHex();
+            }
+             if (bodyMesh.material.color.getHex() !== targetColorHex) {
+                bodyMesh.material.color.setHex(targetColorHex);
+            }
+        }
+    }
+
+    private updateHospitalVisual(visual: THREE.Object3D, entity: HospitalEntity, gameState: GameState): void {
+        // Visual cues for funding level or if ARDS outbreak is happening
+        const baseMesh = visual.children.find(c => c instanceof THREE.Mesh && c.geometry instanceof THREE.BoxGeometry) as THREE.Mesh;
+        if (baseMesh && baseMesh.material instanceof THREE.MeshStandardMaterial) {
+            // Example: If very low funding, make it appear slightly greyed out
+            if (entity.funding < 0.2) {
+                 if (baseMesh.material.color.getHex() !== 0xdddddd) baseMesh.material.color.setHex(0xdddddd);
+            } else {
+                 if (baseMesh.material.color.getHex() !== 0xffffff) baseMesh.material.color.setHex(0xffffff);
+            }
+        }
+        // TODO: Add particle effect for ARDS outbreak (red flashing)
+    }
+
+    private updateWhistleblowerVisual(visual: THREE.Object3D, entity: WhistleblowerEntity, gameState: GameState): void {
+        // Could pulse based on exposure risk or information value
+        const bodyMesh = visual.children[0] as THREE.Mesh; // Assuming cone is first child
+        if (bodyMesh && bodyMesh.material instanceof THREE.MeshStandardMaterial) {
+            if (entity.exposureRisk > 0.7) {
+                // Fast, intense pulse if high risk
+                const pulseFactor = Math.abs(Math.sin(Date.now() * 0.02));
+                bodyMesh.material.opacity = 0.6 + pulseFactor * 0.4;
+                bodyMesh.material.transparent = true;
+            } else {
+                bodyMesh.material.opacity = 1.0;
+                bodyMesh.material.transparent = false;
+            }
+        }
+    }
+
 
     private createUndergroundUnitVisual(entity: IEntity): THREE.Object3D {
         const group = new THREE.Group();
