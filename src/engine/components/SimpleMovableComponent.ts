@@ -1,144 +1,161 @@
 import { BaseComponent, IComponent } from './BaseComponent';
-import type { GameState, Location, PhysicsLayer } from '../GameEngine'; // Assuming Location & PhysicsLayer are exported
+import type { GameState, Location, PhysicsLayer } from '../GameEngine';
+import { IPhysicsPropertiesComponent, DEFAULT_PHYSICS_PROPERTIES_COMPONENT_NAME } from './PhysicsPropertiesComponent';
+import { ITransformComponent, DEFAULT_TRANSFORM_COMPONENT_NAME } from './TransformComponent';
+import { VectorOps, Vector3, PHYSICS_TO_VISUAL_SCALE, VISUAL_TO_PHYSICS_SCALE, EARTH_RADIUS_METERS } from '../PhysicsManager';
 
 export interface ISimpleMovableComponent extends IComponent {
-  speed: number; // Units per second (in world coordinates)
-  targetPosition?: { x: number, y: number }; // For surface movement primarily
+  /** Target speed in game units per second (used to determine force magnitude). */
+  targetSpeed: number;
+  targetPositionGame?: { x: number, y: number, z?: number }; // Target in game coordinates
   isMoving: () => boolean;
-  moveTo(targetX: number, targetY: number): void;
+  moveTo(targetX: number, targetY: number, targetZ?: number): void;
   stop(): void;
 }
 
-import { IEntity } from '../entities/BaseEntity'; // Import IEntity
-
 export class SimpleMovableComponent extends BaseComponent implements ISimpleMovableComponent {
   public readonly type = 'SimpleMovableComponent';
-  public speed: number;
-  public targetPosition?: { x: number, y: number };
-  private perceptionRadius: number = 0.1; // World units for detecting obstacles
-  private avoidanceStrength: number = 0.05; // How strongly to steer away
+  public targetSpeed: number;
+  public targetPositionGame?: { x: number, y: number, z?:number };
+  private perceptionRadiusGame: number = 0.1; // Game units for detecting obstacles
+  private avoidanceStrength: number = 0.05;
+  private arrivalThresholdGame: number = 0.05; // Game units
 
-  constructor(speed: number, perceptionRadius: number = 0.1, avoidanceStrength: number = 0.05) {
+  private forceFactor: number = 500;
+
+  constructor(
+    targetSpeed: number,
+    perceptionRadiusGame: number = 0.1,
+    avoidanceStrength: number = 0.05,
+    arrivalThresholdGame: number = 0.05,
+    forceFactor: number = 500,
+    ) {
     super();
-    this.speed = speed; // e.g., 0.1 world units per second
-    this.perceptionRadius = perceptionRadius;
+    this.targetSpeed = targetSpeed;
+    this.perceptionRadiusGame = perceptionRadiusGame;
     this.avoidanceStrength = avoidanceStrength;
+    this.arrivalThresholdGame = arrivalThresholdGame;
+    this.forceFactor = forceFactor;
   }
 
   public init() {}
 
   public isMoving(): boolean {
-    return this.targetPosition !== undefined;
+    return this.targetPositionGame !== undefined;
   }
 
-  public moveTo(targetX: number, targetY: number): void {
-    this.targetPosition = { x: targetX, y: targetY };
-    // console.log(`Entity ${this.entityId} moving to (${targetX}, ${targetY})`);
+  public moveTo(targetX: number, targetY: number, targetZ?:number ): void {
+    this.targetPositionGame = { x: targetX, y: targetY, z: targetZ };
   }
 
   public stop(): void {
-    this.targetPosition = undefined;
+    this.targetPositionGame = undefined;
   }
 
   public update(gameState: GameState, deltaTime: number): void {
-    if (!this.targetPosition) {
-      return;
-    }
-
     const entity = gameState.entities.get(this.entityId);
-    if (!entity) {
-      this.stop(); // Should not happen if component is properly managed
-      return;
-    }
+    if (!entity) { this.stop(); return; }
 
-    // We'll assume surface movement for this simple component (x, y only)
-    // More complex movement would check entity.location.layer
-    if (entity.location.layer !== PhysicsLayer.Surface) {
-        // console.warn(`Entity ${this.entityId}: SimpleMovableComponent only supports Surface movement for now.`);
-        // this.stop(); // Or handle differently
+    const physicsProps = entity.getComponent<IPhysicsPropertiesComponent>(DEFAULT_PHYSICS_PROPERTIES_COMPONENT_NAME);
+    const transformComp = entity.getComponent<ITransformComponent>(DEFAULT_TRANSFORM_COMPONENT_NAME);
+
+    if (!physicsProps || !transformComp) {
+        this.stop();
         return;
     }
 
-    const currentX = entity.location.coordinates.x;
-    const currentX = entity.location.coordinates.x;
-    const currentY = entity.location.coordinates.y;
-
-    let desiredDx = this.targetPosition.x - currentX;
-    let desiredDy = this.targetPosition.y - currentY;
-    const distanceToTarget = Math.sqrt(desiredDx * desiredDx + desiredDy * desiredDy);
-
-    // Normalize desired direction
-    if (distanceToTarget > 0) {
-        desiredDx /= distanceToTarget;
-        desiredDy /= distanceToTarget;
+    if (!this.targetPositionGame) {
+      // If not actively moving towards a target, apply a damping force to slow down
+      if (VectorOps.magnitudeSq(physicsProps.velocityMps) > 0.01) {
+          const dampingForce = VectorOps.scale(physicsProps.velocityMps, -physicsProps.massKg * 2.0); // Factor 2.0 is arbitrary damping
+          physicsProps.appliedForces.push(dampingForce);
+      }
+      return;
     }
 
-    let avoidanceDx = 0;
-    let avoidanceDy = 0;
-    let obstaclesDetected = 0;
-
-    // Basic Collision Avoidance
-    gameState.entities.forEach(otherEntity => {
-        if (otherEntity.id === this.entityId || !otherEntity.location) return;
-        // Only avoid other surface entities for now
-        if (otherEntity.location.layer !== PhysicsLayer.Surface) return;
-
-        const otherX = otherEntity.location.coordinates.x;
-        const otherY = otherEntity.location.coordinates.y;
-        const distToOtherX = otherX - currentX;
-        const distToOtherY = otherY - currentY;
-        const distanceSquaredToOther = distToOtherX * distToOtherX + distToOtherY * distToOtherY;
-
-        if (distanceSquaredToOther < this.perceptionRadius * this.perceptionRadius) {
-            const distanceToOther = Math.sqrt(distanceSquaredToOther);
-            if (distanceToOther > 0) { // Avoid division by zero if entities are exactly on top
-                // Steer away from the obstacle
-                avoidanceDx -= (distToOtherX / distanceToOther) * (1 - distanceToOther / this.perceptionRadius);
-                avoidanceDy -= (distToOtherY / distanceToOther) * (1 - distanceToOther / this.perceptionRadius);
-                obstaclesDetected++;
-            }
-        }
-    });
-
-    if (obstaclesDetected > 0) {
-        // Normalize avoidance vector
-        const avoidanceMag = Math.sqrt(avoidanceDx * avoidanceDx + avoidanceDy * avoidanceDy);
-        if (avoidanceMag > 0) {
-            avoidanceDx /= avoidanceMag;
-            avoidanceDy /= avoidanceMag;
-        }
+    if (entity.location.layer !== PhysicsLayer.Surface && entity.location.layer !== PhysicsLayer.Underground) {
+        return;
     }
 
-    // Combine desired direction with avoidance direction
-    // Weight avoidance more strongly if very close or many obstacles. For now, simple weighting.
-    const finalDx = desiredDx + avoidanceDx * this.avoidanceStrength;
-    const finalDy = desiredDy + avoidanceDy * this.avoidanceStrength;
+    const currentPosPhysics = transformComp.positionMeters;
 
-    // Normalize final direction
-    const finalMag = Math.sqrt(finalDx * finalDx + finalDy * finalDy);
-    let moveDx = 0;
-    let moveDy = 0;
-    if (finalMag > 0) {
-        moveDx = finalDx / finalMag;
-        moveDy = finalDy / finalMag;
-    } else if (distanceToTarget > 0) { // If avoidance perfectly cancelled desired, just move towards target
-        moveDx = desiredDx;
-        moveDy = desiredDy;
-    }
+    // Convert targetPositionGame (game coordinates) to physics world coordinates.
+    // This relies on GameEngine having a method for this conversion.
+    const targetLocationForConversion: Location = {
+        layer: entity.location.layer,
+        coordinates: this.targetPositionGame,
+        biomeId: entity.location.biomeId, // Important for correct height mapping on surface
+        regionId: entity.location.regionId,
+    };
 
-
-    const moveAmount = this.speed * deltaTime * gameState.speed;
-
-    if (distanceToTarget <= moveAmount && obstaclesDetected === 0) { // Only stop if no obstacles nearby and close to target
-      // Arrived at target
-      entity.location.coordinates.x = this.targetPosition.x;
-      entity.location.coordinates.y = this.targetPosition.y;
-      this.stop();
-      // console.log(`Entity ${this.entityId} arrived at target.`);
+    // Assuming gameState.gameEngine reference exists and has the conversion method.
+    // This part is crucial and depends on GameEngine.ts structure.
+    // For now, we'll have to assume such a method exists or do a simpler placeholder.
+    // Let's use the one in PhysicsManager for now, which is a simplified spherical mapping.
+    // This needs to be robust: game clicks (likely 2D screen or map) -> 3D world point on sphere.
+    let targetPosPhysics: Vector3;
+    if (gameState.gameEngine && typeof gameState.gameEngine.convertGameLocationToPhysicsPosition === 'function') {
+        targetPosPhysics = gameState.gameEngine.convertGameLocationToPhysicsPosition(targetLocationForConversion);
     } else {
-      // Move
-      entity.location.coordinates.x += moveDx * moveAmount;
-      entity.location.coordinates.y += moveDy * moveAmount;
+        // Fallback / Placeholder if the method isn't found (should be fixed in GameEngine)
+        // This simplified conversion assumes targetPositionGame.x/y are lon/lat factors.
+        const lonRad = this.targetPositionGame.x * Math.PI;
+        const latRad = this.targetPositionGame.y * (Math.PI / 2);
+        const r = EARTH_RADIUS_METERS + ((this.targetPositionGame.z || 0) * VISUAL_TO_PHYSICS_SCALE);
+        targetPosPhysics = {
+            x: r * Math.cos(latRad) * Math.cos(lonRad),
+            y: r * Math.cos(latRad) * Math.sin(lonRad),
+            z: r * Math.sin(latRad)
+        };
+        // console.warn("SimpleMovableComponent: Using fallback for target physics position conversion.");
     }
+
+
+    let desiredDirectionPhysics = VectorOps.subtract(targetPosPhysics, currentPosPhysics);
+    const surfaceNormal = VectorOps.normalize(currentPosPhysics); // Normal to sphere at current position
+    const componentNormalToSurface = VectorOps.dot(desiredDirectionPhysics, surfaceNormal);
+    // Project desired direction onto the tangent plane of the sphere
+    desiredDirectionPhysics = VectorOps.subtract(desiredDirectionPhysics, VectorOps.scale(surfaceNormal, componentNormalToSurface));
+
+    const distanceToTargetPhysics = VectorOps.magnitude(desiredDirectionPhysics);
+
+    // Use physics scale for arrival threshold
+    const arrivalThresholdPhysics = this.arrivalThresholdGame * VISUAL_TO_PHYSICS_SCALE * EARTH_RADIUS_METERS; // Rough conversion
+
+    if (distanceToTargetPhysics < arrivalThresholdPhysics) {
+      this.stop();
+      // Apply a strong braking force to stop quickly at target
+      const brakingForce = VectorOps.scale(physicsProps.velocityMps, -physicsProps.massKg * 5.0); // Strong damping
+      physicsProps.appliedForces.push(brakingForce);
+      return;
+    }
+
+    desiredDirectionPhysics = VectorOps.normalize(desiredDirectionPhysics);
+
+    // TODO: Collision Avoidance would modify desiredDirectionPhysics or add counter-forces
+
+    // Target speed in m/s (this.targetSpeed is in game units/sec)
+    // This conversion of targetSpeed is also a placeholder and needs to be robust.
+    // If this.targetSpeed is meant to be a desired m/s in physics, no conversion needed.
+    // If it's game units / sec, then VISUAL_TO_PHYSICS_SCALE might be involved.
+    // Let's assume this.targetSpeed is already a desired physical speed in m/s for now.
+    const desiredPhysicalSpeed = this.targetSpeed;
+
+    const targetVelocity = VectorOps.scale(desiredDirectionPhysics, desiredPhysicalSpeed);
+    const steeringVector = VectorOps.subtract(targetVelocity, physicsProps.velocityMps);
+
+    let steeringForce = VectorOps.scale(steeringVector, physicsProps.massKg); // Basic P-controller for velocity
+    // Scale by forceFactor to control "responsiveness"
+    steeringForce = VectorOps.scale(steeringForce, this.forceFactor * deltaTime);
+
+
+    if (physicsProps.maxAccelerationMps2) {
+        const maxForceMag = physicsProps.massKg * physicsProps.maxAccelerationMps2;
+        if (VectorOps.magnitudeSq(steeringForce) > maxForceMag * maxForceMag) {
+            steeringForce = VectorOps.scale(VectorOps.normalize(steeringForce), maxForceMag);
+        }
+    }
+
+    physicsProps.appliedForces.push(steeringForce);
   }
 }
