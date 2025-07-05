@@ -3,15 +3,18 @@ import type { GameState, NaturalDisaster, NaturalDisasterEffect, DisasterType, B
 import type { IEntity } from './entities/BaseEntity';
 import type { IHealthComponent } from './components/HealthComponent';
 import type { IPopulationComponent } from './components/PopulationComponent';
+import type { SoundManager } from './SoundManager'; // Import SoundManager
 
 export class DisasterManager {
   private gameState: GameState;
+  private soundManager: SoundManager; // Add SoundManager instance
   private timeSinceLastCheck: number = 0;
   private disasterCheckInterval: number = 60 * 10; // Check for new disasters every 10 minutes (game time)
   private nextDisasterId: number = 0;
 
-  constructor(gameState: GameState) {
+  constructor(gameState: GameState, soundManager: SoundManager) { // Accept SoundManager
     this.gameState = gameState;
+    this.soundManager = soundManager; // Store SoundManager instance
   }
 
   public update(deltaTime: number): void {
@@ -27,18 +30,51 @@ export class DisasterManager {
 
   private triggerRandomDisaster(): void {
     // Basic probability: 5% chance of a disaster event per check interval
-    if (Math.random() > 0.05) return;
+    if (Math.random() > 0.05) return; // Overall chance of any disaster
 
-    const disasterTypes = Object.values(DisasterType).filter(v => !isNaN(Number(v))) as DisasterType[];
-    const randomType = disasterTypes[Math.floor(Math.random() * disasterTypes.length)];
+    const availableDisasterTypes = Object.values(DisasterType).filter(v => !isNaN(Number(v))) as DisasterType[];
+    if (availableDisasterTypes.length === 0) return;
+
+    const randomType = availableDisasterTypes[Math.floor(Math.random() * availableDisasterTypes.length)];
 
     // Select a random biome for the disaster's origin
-    const biomesArray = Array.from(this.gameState.biomes.values());
+    let biomesArray = Array.from(this.gameState.biomes.values());
     if (biomesArray.length === 0) return;
-    const targetBiome = biomesArray[Math.floor(Math.random() * biomesArray.length)];
 
-    // For simplicity, center disaster in the biome (using placeholder coordinates if none defined)
-    // In a real game, this would be more sophisticated, perhaps linked to specific entities or map points
+    let targetBiome: Biome | undefined;
+
+    // Specific biome selection logic for Wildfire
+    if (randomType === DisasterType.Wildfire) {
+        const potentialBiomesForWildfire = biomesArray.filter(b =>
+            (b.naturalResources.get('wood') || 0) > 50 && // Must have some wood
+            b.currentWeather && b.currentWeather.temperature > 25 && // Hot
+            b.currentWeather.precipitation < 0.1 // Dry
+        );
+        if (potentialBiomesForWildfire.length > 0) {
+            targetBiome = potentialBiomesForWildfire[Math.floor(Math.random() * potentialBiomesForWildfire.length)];
+        } else {
+            // If no ideal biome, maybe don't trigger wildfire or pick a less ideal one (e.g. just has wood)
+            // For now, if no suitable biome, we might skip this specific wildfire event this time.
+            // To ensure a disaster still has a chance, we could re-pick type or allow fallback.
+            // Fallback: pick any biome that has wood.
+            const fallbackBiomes = biomesArray.filter(b => (b.naturalResources.get('wood') || 0) > 20);
+            if (fallbackBiomes.length > 0) {
+                targetBiome = fallbackBiomes[Math.floor(Math.random() * fallbackBiomes.length)];
+            } else {
+                 console.log("Skipping Wildfire: No suitable biomes found (hot, dry, with wood).");
+                 return; // Skip disaster this time if no suitable biome for wildfire
+            }
+        }
+    } else {
+        targetBiome = biomesArray[Math.floor(Math.random() * biomesArray.length)];
+    }
+
+    if (!targetBiome) { // Should not happen if logic above is correct, but as a safeguard
+        console.warn("DisasterManager: Could not select a target biome.");
+        return;
+    }
+
+    // For simplicity, center disaster in the biome
     const disasterLocation: Location = {
         layer: PhysicsLayer.Surface, // Assume surface disasters for now
         // Attempt to find a central point or use a default
@@ -60,6 +96,7 @@ export class DisasterManager {
           effects: [{ type: 'damage_entities', magnitude: Math.random() * 50 + 50 }], // 50-100 damage
           isActive: true, description: `A powerful earthquake strikes near ${targetBiome.name}!`
         };
+        this.soundManager.playSoundEffect('disaster_alert_earthquake');
         break;
       case DisasterType.Storm:
         newDisaster = {
@@ -72,9 +109,12 @@ export class DisasterManager {
           ],
           isActive: true, description: `A severe storm is battering the region around ${targetBiome.name}!`
         };
+        this.soundManager.playSoundEffect('disaster_alert_storm');
         break;
-      // TODO: Add cases for Drought, Wildfire, Flood with appropriate effects
+      // TODO: Add cases for Drought, Flood with appropriate effects
       case DisasterType.Drought:
+        // Droughts are often silent, might not need an immediate alert sound, or a more subtle one.
+        // For now, no specific sound alert for drought start. Ambience might reflect it.
         newDisaster = {
             id: disasterId, name: "Drought", type: DisasterType.Drought,
             location: disasterLocation, radius: Math.random() * 0.5 + 0.3, // Large area
@@ -83,13 +123,34 @@ export class DisasterManager {
             isActive: true, description: `A prolonged drought is affecting ${targetBiome.name}.`
         };
         // Droughts might also affect water availability in biomes directly
-        targetBiome.naturalResources.set('water', (targetBiome.naturalResources.get('water') || 0) * 0.5);
+        const currentWater = targetBiome.naturalResources.get('water') || 0;
+        targetBiome.naturalResources.set('water', Math.max(0, currentWater * 0.5));
         break;
+      case DisasterType.Wildfire:
+        newDisaster = {
+          id: disasterId, name: "Wildfire", type: DisasterType.Wildfire,
+          location: disasterLocation, radius: Math.random() * 0.25 + 0.15, // Radius 0.15 to 0.4
+          startTime, duration: 3600 * (Math.random() * 4 + 2), // 2-6 game hours
+          effects: [
+            { type: 'damage_entities', magnitude: Math.random() * 40 + 30 }, // 30-70 damage to entities in area
+            { type: 'modify_biome_resources', resourceId: 'wood', magnitude: -(Math.random() * 0.5 + 0.2) * (targetBiome.naturalResources.get('wood') || 0) } // Reduce wood by 20-70%
+          ],
+          isActive: true, description: `A wildfire is raging through ${targetBiome.name}!`
+        };
+        // Directly reduce wood resources in the biome when wildfire starts
+        const woodReduction = (targetBiome.naturalResources.get('wood') || 0) * (Math.random() * 0.4 + 0.2); // Example: 20-60% reduction
+        const currentWood = targetBiome.naturalResources.get('wood') || 0;
+        targetBiome.naturalResources.set('wood', Math.max(0, currentWood - woodReduction));
+        console.log(`Wildfire reduced wood in ${targetBiome.name} by ${woodReduction.toFixed(0)} units.`);
+        this.soundManager.playSoundEffect('disaster_alert_wildfire');
+        break;
+      // TODO: Add case for Flood
     }
 
     if (newDisaster) {
       this.gameState.activeDisasters.push(newDisaster);
-      console.log(`New disaster: ${newDisaster.name} started at biome ${targetBiome.name}. Effects: ${newDisaster.effects.map(e => e.type).join(', ')}`);
+      console.log(`New disaster: ${newDisaster.name} started at biome ${targetBiome.id} (${targetBiome.name}). Effects: ${newDisaster.effects.map(e => `${e.type} (mag: ${e.magnitude})`).join(', ')}`);
+      // Sound effects are now triggered inside each disaster case.
       // Apply immediate one-time effects of the disaster
       this.applyDisasterEffects(newDisaster);
     }
@@ -153,17 +214,28 @@ export class DisasterManager {
                 const biome = this.gameState.biomes.get(disaster.location.biomeId);
                 if (biome) {
                     const currentAmount = biome.naturalResources.get(effect.resourceId) || 0;
-                    // Magnitude can be positive or negative. If negative, it's a reduction.
-                    // If effect.magnitude is a multiplier (e.g. -0.5 for 50% reduction), logic needs to reflect that.
-                    // Assuming magnitude is a direct quantity change for now.
-                    const changeAmount = effect.magnitude; // If it's a delta.
+                    let changeAmount = effect.magnitude;
+
+                    // If magnitude is negative and less than 1 (treat as percentage reduction for some effects like wildfire wood reduction)
+                    // This interpretation depends on how magnitude was set during disaster creation.
+                    // For wildfire wood effect, magnitude is already calculated as a negative absolute value.
+                    // For drought food effect, magnitude is -0.5, which is a multiplier handled by production logic.
+
+                    // Let's assume direct modification for resources like wood from wildfire.
+                    // The DisasterManager already directly modified the wood when the wildfire started.
+                    // This effect definition is more for logging or if other systems need to react to it.
+                    // So, for 'modify_biome_resources' handled directly at disaster start (like Wildfire wood),
+                    // this switch case might not need to do much more than log, or it could be a secondary effect.
+                    // For now, the direct modification in triggerRandomDisaster for Wildfire's wood is the primary mechanism.
+                    // This effect here could be for *additional* changes or for other systems to notice.
+
+                    // Example: if effect.magnitude is a direct change amount:
                     // biome.naturalResources.set(effect.resourceId, Math.max(0, currentAmount + changeAmount));
-                    // console.log(`Biome ${biome.id} resource ${effect.resourceId} changed by ${changeAmount} due to ${disaster.name}.`);
-                    // For Drought, the effect is more on *rates* or *availability*, handled by ProductionFacilityComponent
+                    // console.log(`Biome ${biome.id} resource ${effect.resourceId} additionally changed by ${changeAmount} due to ${disaster.name} effect processing.`);
                 }
             }
             break;
-          // case 'change_terrain': // More complex, might affect movement or arable land
+          // case 'change_terrain': // More complex, might affect movement or arable land (e.g. after wildfire, land becomes less fertile for a time)
           //   break;
         }
       });

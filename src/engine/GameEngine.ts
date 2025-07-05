@@ -124,12 +124,13 @@ export interface GameState {
 }
 
 // NATURAL DISASTERS
-export enum DisasterType { Earthquake, Storm, Drought, Wildfire, Flood }
+export enum DisasterType { Earthquake, Storm, Drought, Flood, Wildfire } // Added Wildfire
 export interface NaturalDisasterEffect {
   type: 'damage_entities' | 'reduce_population' | 'modify_biome_resources' | 'change_terrain';
-  magnitude: number;
-  resourceId?: string;
-  affectedEntityType?: string;
+  magnitude: number; // General magnitude. For damage, it's points. For pop reduction, percentage. For resource mod, amount or multiplier.
+  resourceId?: string; // e.g., 'wood', 'food'
+  affectedEntityType?: string; // e.g., 'CityEntity', 'FactoryEntity'
+  durationOfEffect?: number; // For effects that last longer than the disaster itself or DOTs
 }
 export interface NaturalDisaster extends Identifiable {
   type: DisasterType;
@@ -496,6 +497,7 @@ class FactionManager {
 // Import entities for initialization
 import { FactoryEntity } from './entities/FactoryEntity';
 import { ScoutUnitEntity } from './entities/ScoutUnitEntity';
+import { SoundManager } from './SoundManager'; // Import SoundManager
 
 export class GameEngine {
   private gameState: GameState;
@@ -508,9 +510,13 @@ export class GameEngine {
   public disasterManager: DisasterManager;
   public techManager: TechManager;
   public territoryManager: TerritoryManager;
+  public soundManager: SoundManager; // Add SoundManager instance
+
+  private activeAmbientSounds: Set<string> = new Set(); // To track current global ambient sounds
 
   constructor() {
     this.gameState = this.createInitialGameState();
+    this.soundManager = new SoundManager(); // Initialize SoundManager
     this.entityManager = new EntityManager(this.gameState);
     this.physicsManager = new PhysicsManager(this.gameState);
     this.economyManager = new EconomyManager(this.gameState);
@@ -518,9 +524,11 @@ export class GameEngine {
     this.techManager = new TechManager(this.gameState);
     this.factionManager = new FactionManager(this.gameState, this.entityManager, this.techManager);
     this.weatherManager = new WeatherManager(this.gameState);
-    this.disasterManager = new DisasterManager(this.gameState);
+    // Pass SoundManager to DisasterManager if it needs to trigger sounds directly
+    this.disasterManager = new DisasterManager(this.gameState, this.soundManager);
     this.territoryManager = new TerritoryManager(this.gameState);
     this.initializeWorld();
+    this.soundManager.setMusic('main_theme_peaceful'); // Start with peaceful music
   }
 
   private createInitialGameState(): GameState {
@@ -687,8 +695,76 @@ export class GameEngine {
     this.entityManager.updateAll(scaledDeltaTime);
     this.factionManager.update(scaledDeltaTime);
 
+    this.updateGlobalAmbientSounds(); // New method for ambient sounds
     this.calculateGlobalStats();
     return this.gameState;
+  }
+
+  private updateGlobalAmbientSounds(): void {
+    let totalPrecipitation = 0;
+    let totalWindSpeed = 0;
+    let biomesCount = 0;
+    let isSnowingSomewhere = false;
+
+    this.gameState.biomes.forEach(biome => {
+        if (biome.currentWeather) {
+            totalPrecipitation += biome.currentWeather.precipitation;
+            totalWindSpeed += biome.currentWeather.windSpeed;
+            if (biome.currentWeather.precipitation > 0.1 && biome.currentWeather.temperature <= 0) {
+                isSnowingSomewhere = true;
+            }
+            biomesCount++;
+        }
+    });
+
+    const avgPrecip = biomesCount > 0 ? totalPrecipitation / biomesCount : 0;
+    const avgWind = biomesCount > 0 ? totalWindSpeed / biomesCount : 0;
+
+    // Manage rain sounds
+    if (avgPrecip > 2.0 && !isSnowingSomewhere) { // Heavy rain
+        this.startAmbient('rain_heavy');
+        this.stopAmbient('rain_light');
+    } else if (avgPrecip > 0.2 && !isSnowingSomewhere) { // Light rain
+        this.startAmbient('rain_light');
+        this.stopAmbient('rain_heavy');
+    } else {
+        this.stopAmbient('rain_light');
+        this.stopAmbient('rain_heavy');
+    }
+
+    // Manage snow (visuals are global, so ambient sound can be too for now)
+    // If specific biome sounds were implemented, this would be different.
+    // For now, if it's snowing visually (driven by avg temp in Earth3D), play a generic snow/wind.
+    // This part is a bit tricky as Earth3D handles visuals based on averages.
+    // Let's assume if avgPrecip > 0.2 AND avgTemp <= 0 (from Earth3D logic), it's "snowing globally".
+    // Actual snow ambient sound might be part of 'wind_strong' or a dedicated 'snow_storm' sound.
+    // For now, focusing on rain and wind based on engine data.
+
+    // Manage wind sounds
+    if (avgWind > 25) { // Strong wind
+        this.startAmbient('wind_strong');
+        this.stopAmbient('wind_calm');
+    } else if (avgWind > 5) { // Calm wind
+        this.startAmbient('wind_calm');
+        this.stopAmbient('wind_strong');
+    } else { // Very little wind
+        this.stopAmbient('wind_calm');
+        this.stopAmbient('wind_strong');
+    }
+  }
+
+  private startAmbient(soundName: any): void { // Type should be AmbientSound, but any for now due to string literal types
+    if (!this.activeAmbientSounds.has(soundName)) {
+        this.soundManager.playAmbientSound(soundName);
+        this.activeAmbientSounds.add(soundName);
+    }
+  }
+
+  private stopAmbient(soundName: any): void { // Type should be AmbientSound
+      if (this.activeAmbientSounds.has(soundName)) {
+          this.soundManager.stopAmbientSound(soundName);
+          this.activeAmbientSounds.delete(soundName);
+      }
   }
 
   private calculateGlobalStats(): void {

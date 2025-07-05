@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { GameState, WorldRegion, RegionEvent, EventType, Faction, Ideology } from '../engine/GameEngine'; // Added Faction, Ideology
+import { GameState, WorldRegion, RegionEvent, EventType, Faction, Ideology, WeatherCondition, Biome } from '../engine/GameEngine'; // Added WeatherCondition, Biome
 import SimplexNoise from 'simplex-noise';
 
 export interface Satellite {
@@ -43,6 +43,14 @@ export class Earth3D {
   private mouse = new THREE.Vector2();
   private controls: any;
   private animationId: number = 0;
+
+  // Weather effect properties
+  private rainParticles: THREE.Points | null = null;
+  private snowParticles: THREE.Points | null = null;
+  private rainMaterial: THREE.PointsMaterial | null = null;
+  private snowMaterial: THREE.PointsMaterial | null = null;
+  private readonly PARTICLE_COUNT = 5000;
+  private currentGameState: GameState | null = null;
   
   public onRegionClick?: (region: WorldRegion, x: number, y: number) => void;
   public onSatelliteClick?: (satellite: Satellite, x: number, y: number) => void;
@@ -64,10 +72,15 @@ export class Earth3D {
     this.createAtmosphere();
     this.createClouds();
     this.createSatellites();
-    this.createFactionVisualLayers(); // Initialize faction layers
+    this.createFactionVisualLayers();
+    this.createWeatherParticles(); // New method for weather
     this.setupControls();
     this.setupEventListeners(container);
     this.animate();
+  }
+
+  public updateCurrentGameState(gameState: GameState): void {
+    this.currentGameState = gameState;
   }
   
   private createFactionVisualLayers() {
@@ -91,6 +104,70 @@ export class Earth3D {
 
     // Add faction HQ layer to the scene
     this.scene.add(this.factionHQLayer);
+  }
+
+  private createParticleTexture(color: string, size: number = 16): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d')!;
+    context.beginPath();
+    context.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2); // Draw a circle
+    context.fillStyle = color;
+    context.fill();
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  private createWeatherParticles(): void {
+    const particleSpreadFactor = 5; // How far out particles can spawn around the globe
+
+    // Rain Material
+    this.rainMaterial = new THREE.PointsMaterial({
+      color: 0xaaaaee,
+      size: 0.03,
+      map: this.createParticleTexture('rgba(170,170,238,0.7)'), // Light blue, slightly transparent
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true,
+    });
+
+    // Snow Material
+    this.snowMaterial = new THREE.PointsMaterial({
+      color: 0xffffff,
+      size: 0.04,
+      map: this.createParticleTexture('rgba(255,255,255,0.8)'), // White, slightly transparent
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true,
+    });
+
+    const createParticleSystem = (material: THREE.PointsMaterial): THREE.Points => {
+      const geometry = new THREE.BufferGeometry();
+      const vertices: number[] = [];
+      for (let i = 0; i < this.PARTICLE_COUNT; i++) {
+        // Distribute particles in a spherical shell around the Earth
+        const theta = Math.random() * 2 * Math.PI;
+        const phi = Math.acos((Math.random() * 2) - 1);
+        const r = this.earth.geometry.parameters.radius * 1.5 + Math.random() * particleSpreadFactor; // Spawn above earth surface + spread
+
+        const x = r * Math.sin(phi) * Math.cos(theta);
+        const y = r * Math.sin(phi) * Math.sin(theta);
+        const z = r * Math.cos(phi);
+        vertices.push(x, y, z);
+      }
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+      const particles = new THREE.Points(geometry, material);
+      particles.visible = false;
+      this.scene.add(particles);
+      return particles;
+    };
+
+    this.rainParticles = createParticleSystem(this.rainMaterial);
+    this.snowParticles = createParticleSystem(this.snowMaterial);
   }
 
   private setupRenderer(container: HTMLElement) {
@@ -512,9 +589,10 @@ export class Earth3D {
     this.animationId = requestAnimationFrame(this.animate);
     
     // Rotate earth slowly
-    this.earth.rotation.y += 0.001;
+    this.earth.rotation.y += 0.001; // This should ideally be driven by game time if day/night cycle matters
     this.atmosphere.rotation.y += 0.001;
-    this.clouds.rotation.y += 0.0012;
+    this.clouds.rotation.y += 0.0012; // Clouds move slightly faster
+
     if (this.factionInfluenceOverlay) {
       this.factionInfluenceOverlay.rotation.copy(this.earth.rotation);
     }
@@ -522,6 +600,10 @@ export class Earth3D {
       this.factionHQLayer.rotation.copy(this.earth.rotation);
     }
     
+    if (this.currentGameState) {
+      this.updateWeatherVisuals(this.currentGameState);
+    }
+
     // Update satellite positions
     this.satellites.forEach(satellite => {
       const { orbit } = satellite;
@@ -546,6 +628,98 @@ export class Earth3D {
     
     this.renderer.render(this.scene, this.camera);
   };
+
+  private updateWeatherVisuals(gameState: GameState): void {
+    if (!this.rainParticles || !this.snowParticles || !this.clouds || !this.clouds.material) return;
+
+    let totalPrecipitation = 0;
+    let avgTemperature = 0;
+    let activeBiomes = 0;
+
+    gameState.biomes.forEach(biome => {
+      if (biome.currentWeather) {
+        totalPrecipitation += biome.currentWeather.precipitation;
+        avgTemperature += biome.currentWeather.temperature;
+        activeBiomes++;
+      }
+    });
+
+    const avgPrecip = activeBiomes > 0 ? totalPrecipitation / activeBiomes : 0;
+    avgTemperature = activeBiomes > 0 ? avgTemperature / activeBiomes : 15; // Default to 15C if no data
+
+    // Dynamic Cloud Opacity
+    const baseCloudOpacity = 0.3; // Minimum cloud cover
+    const maxCloudOpacity = 0.7;  // Maximum cloud cover for heavy precipitation
+    // Normalize avgPrecip (e.g. 0-10mm/hr range) to 0-1 for opacity factor
+    const precipFactor = Math.min(1, avgPrecip / 10);
+    (this.clouds.material as THREE.MeshBasicMaterial).opacity = baseCloudOpacity + (maxCloudOpacity - baseCloudOpacity) * precipFactor;
+
+    // Particle animation (global effect based on average conditions)
+    const earthRadius = this.earth.geometry.parameters.radius;
+    const particleVolumeHalfHeight = earthRadius * 3; // Particles fall from this height range
+
+    const animateParticles = (particles: THREE.Points, speed: number, deltaTime: number = 0.016) => {
+      const positions = particles.geometry.attributes.position as THREE.BufferAttribute;
+      const particleSystemRotation = particles.rotation; // Particles should not rotate with Earth
+
+      for (let i = 0; i < positions.count; i++) {
+        const x = positions.getX(i);
+        let y = positions.getY(i);
+        const z = positions.getZ(i);
+
+        // Create a vector for the particle's current position
+        const particlePosition = new THREE.Vector3(x, y, z);
+        // Apply the inverse of the Earth's rotation to keep particles fixed relative to the world
+        // This is a simplification; true weather systems are complex.
+        // For this visual, we'll have them fall straight down in world space.
+
+        particlePosition.y -= speed * deltaTime * (Math.random() * 0.5 + 0.5); // Fall down
+
+        // If particle is below a certain threshold (e.g., below camera view or near center of earth)
+        // Reset its position to somewhere above the earth.
+        // This needs to be relative to the Earth's sphere.
+        // A simple check: if y is too low, reset.
+        if (particlePosition.length() < earthRadius * 0.8 || particlePosition.y < -particleVolumeHalfHeight) {
+            // Reset to a new random position in the spherical shell
+            const theta = Math.random() * 2 * Math.PI;
+            const phi = Math.acos((Math.random() * 2) - 1);
+            // Spawn higher up, e.g., from 2x earth radius up to 4x earth radius
+            const r = earthRadius * 1.5 + Math.random() * earthRadius * 2;
+
+            particlePosition.set(
+                r * Math.sin(phi) * Math.cos(theta),
+                r * Math.sin(phi) * Math.sin(theta), // This should likely be the Z for spherical coords
+                r * Math.cos(phi) // And this Y, or adjust system
+            );
+            // Correcting spherical to cartesian for Y-up system:
+            const newR = earthRadius * 1.5 + Math.random() * particleVolumeHalfHeight * 2; // Spawn higher
+            const newX = newR * Math.sin(phi) * Math.cos(theta);
+            const newY = particleVolumeHalfHeight * (0.5 + Math.random() * 0.5); // Start from top of volume
+            const newZ = newR * Math.sin(phi) * Math.sin(theta); // Use sin for Z with y-up
+
+            positions.setXYZ(i, newX, newY, newZ);
+        } else {
+            positions.setXYZ(i, particlePosition.x, particlePosition.y, particlePosition.z);
+        }
+      }
+      positions.needsUpdate = true;
+    };
+
+    if (avgPrecip > 0.1) { // Threshold for showing precipitation
+      if (avgTemperature > 0) { // Rain
+        this.rainParticles.visible = true;
+        this.snowParticles.visible = false;
+        animateParticles(this.rainParticles, 5.0); // Rain fall speed
+      } else { // Snow
+        this.snowParticles.visible = true;
+        this.rainParticles.visible = false;
+        animateParticles(this.snowParticles, 1.5); // Snow fall speed (slower)
+      }
+    } else {
+      this.rainParticles.visible = false;
+      this.snowParticles.visible = false;
+    }
+  }
   
   public updateRegionData(regions: WorldRegion[]) {
     // Update region visualization based on game state
@@ -768,5 +942,11 @@ export class Earth3D {
       cancelAnimationFrame(this.animationId);
     }
     this.renderer.dispose();
+
+    // Dispose weather particle materials and geometries
+    this.rainMaterial?.dispose();
+    this.snowMaterial?.dispose();
+    this.rainParticles?.geometry.dispose();
+    this.snowParticles?.geometry.dispose();
   }
 }
