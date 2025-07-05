@@ -109,3 +109,16 @@ export const PopulationEvent = {
   POPULATION_UNREST_CHANGE: 'population:unrest_change',
   POPULATION_MORALE_CHANGE: 'population:morale_change',
 };
+
+export const VisualEffectEvent = {
+  TRIGGER_PARTICLE_EFFECT: 'visual:trigger_particle_effect',
+  // Add other visual effect event types here
+};
+
+export interface TriggerParticleEffectPayload {
+  effectType: string; // e.g., 'riot', 'explosion', 'experiment_deploy'
+  hexCellId: string;  // ID of the hex cell where the effect should originate
+  intensity?: number; // Optional intensity (0-1) to scale the effect
+  duration?: number;  // Optional duration for the effect or emitter lifetime in seconds
+  // Add other relevant parameters like color, scale, specific entity target ID etc.
+}

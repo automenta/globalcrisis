@@ -1,0 +1,48 @@
+/* Silent Helix - style.css */
+body {
+    margin: 0;
+    overflow: hidden; /* Prevent scrollbars from Three.js canvas */
+    background-color: #1a1a1a; /* Dark background for cyberpunk theme */
+    color: #00ff00; /* Neon green text color */
+    font-family: 'Courier New', Courier, monospace; /* Monospaced font for terminal feel */
+}
+
+#game-container {
+    width: 100vw;
+    height: 100vh;
+}
+
+/* Placeholder for UI elements, e.g., dashboard, alerts */
+.ui-panel {
+    position: absolute;
+    background-color: rgba(0, 20, 0, 0.8); /* Dark green, semi-transparent */
+    border: 1px solid #00ff00; /* Neon green border */
+    padding: 10px;
+    box-shadow: 0 0 10px #00ff00; /* Neon glow effect */
+}
+
+#dashboard {
+    bottom: 10px;
+    left: 10px;
+    width: 300px;
+    height: 200px;
+}
+
+#alerts {
+    top: 10px;
+    right: 10px;
+    width: 400px;
+    max-height: 30%;
+    overflow-y: auto;
+}
+
+.alert-message {
+    margin-bottom: 5px;
+    padding: 5px;
+    border-bottom: 1px dashed #00cc00;
+}
+
+.alert-message.critical {
+    color: #ff0000; /* Red for critical alerts */
+    border-bottom-color: #ff0000;
+}

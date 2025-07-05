@@ -1,257 +1,276 @@
 import * as THREE from 'three';
-import { IEntity } from './entities/BaseEntity';
-import { Faction } from './GameEngine'; // Assuming Faction is exported from GameEngine
+// import { IEntity } from './entities/BaseEntity'; // Not directly used in HexCell itself
+// import { Faction } from './GameEngine'; // Not directly used in HexCell itself
+
+// Helper function for quantized vertex keys
+const PRECISION_FACTOR = 10000; // For 4-5 decimal places of effective precision
+function getQuantizedVertexKey(vertex: THREE.Vector3): string {
+    return `${Math.round(vertex.x * PRECISION_FACTOR)}_${Math.round(vertex.y * PRECISION_FACTOR)}_${Math.round(vertex.z * PRECISION_FACTOR)}`;
+}
 
 export interface HexCell {
     id: string;
-    // Center point in 3D space on the surface of a unit sphere
     centerPointUnitSphere: THREE.Vector3;
-    // Vertices defining the cell boundary on the surface of a unit sphere
-    verticesUnitSphere: THREE.Vector3[];
-
-    // Actual world-space coordinates (scaled by Earth radius)
+    verticesUnitSphere: THREE.Vector3[]; // Vertices defining the cell boundary
     centerPointWorld: THREE.Vector3;
     verticesWorld: THREE.Vector3[];
 
     neighborIds: string[];
-
-    // Game data
-    biomeId?: string;
-    // Later: resourceDistribution: Map<string, number>;
-    controllingFactionId?: string;
     entitiesInCell: string[]; // IDs of entities within this cell
-
-    // Visual representation (optional, could be managed separately)
+    shProps?: import('./GameEngine').HexTileProperties;
     mesh?: THREE.Mesh | THREE.LineLoop;
+
+    // Pathfinding properties
+    movementCost: number;
 }
 
 export class HexGridManager {
     public cells: Map<string, HexCell> = new Map();
-    private earthRadius: number; // Visual radius of the Earth in Three.js scene
+    private earthRadius: number;
 
     constructor(earthRadius: number, subdivisions: number = 2) {
         this.earthRadius = earthRadius;
         this.generateGrid(subdivisions);
+        this.computeNeighbors(); // Compute neighbors after grid generation
     }
 
     private generateGrid(subdivisions: number): void {
-        // Placeholder for icosahedron generation and subdivision
-        // This is a complex part.
-        // For now, let's create a few dummy cells for structure.
-
         console.log(`[HexGridManager] Generating grid with ${subdivisions} subdivisions for Earth radius ${this.earthRadius}.`);
 
-        // Step 1: Create a base polyhedron (e.g., Icosahedron)
-        const t = (1.0 + Math.sqrt(5.0)) / 2.0; // Golden ratio
-
+        const t = (1.0 + Math.sqrt(5.0)) / 2.0;
         const icosahedronVerticesUnitSphere: THREE.Vector3[] = [
-            new THREE.Vector3(-1,  t,  0).normalize(),
-            new THREE.Vector3( 1,  t,  0).normalize(),
-            new THREE.Vector3(-1, -t,  0).normalize(),
-            new THREE.Vector3( 1, -t,  0).normalize(),
+            new THREE.Vector3(-1,  t,  0), new THREE.Vector3( 1,  t,  0), new THREE.Vector3(-1, -t,  0), new THREE.Vector3( 1, -t,  0),
+            new THREE.Vector3( 0, -1,  t), new THREE.Vector3( 0,  1,  t), new THREE.Vector3( 0, -1, -t), new THREE.Vector3( 0,  1, -t),
+            new THREE.Vector3( t,  0, -1), new THREE.Vector3( t,  0,  1), new THREE.Vector3(-t,  0, -1), new THREE.Vector3(-t,  0,  1),
+        ].map(v => v.normalize());
 
-            new THREE.Vector3( 0, -1,  t).normalize(),
-            new THREE.Vector3( 0,  1,  t).normalize(),
-            new THREE.Vector3( 0, -1, -t).normalize(),
-            new THREE.Vector3( 0,  1, -t).normalize(),
-
-            new THREE.Vector3( t,  0, -1).normalize(),
-            new THREE.Vector3( t,  0,  1).normalize(),
-            new THREE.Vector3(-t,  0, -1).normalize(),
-            new THREE.Vector3(-t,  0,  1).normalize(),
-        ];
-
-        // Icosahedron faces (vertex indices)
         const icosahedronFaces: [number, number, number][] = [
-            [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
-            [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
-            [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-            [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]
+            [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2],
+            [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5],
+            [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]
         ];
 
         let faces: THREE.Vector3[][] = icosahedronFaces.map(faceIndices =>
             faceIndices.map(index => icosahedronVerticesUnitSphere[index].clone())
         );
 
-        // Step 2: Subdivide faces
-        // For each subdivision level, each triangle is split into 4 smaller triangles
         for (let s = 0; s < subdivisions; s++) {
             const newFaces: THREE.Vector3[][] = [];
-            for (const face of faces) {
-                const v0 = face[0];
-                const v1 = face[1];
-                const v2 = face[2];
-
+            faces.forEach(face => {
+                const v0 = face[0]; const v1 = face[1]; const v2 = face[2];
                 const m01 = new THREE.Vector3().addVectors(v0, v1).multiplyScalar(0.5).normalize();
                 const m12 = new THREE.Vector3().addVectors(v1, v2).multiplyScalar(0.5).normalize();
                 const m20 = new THREE.Vector3().addVectors(v2, v0).multiplyScalar(0.5).normalize();
-
                 newFaces.push([v0.clone(), m01.clone(), m20.clone()]);
                 newFaces.push([m01.clone(), v1.clone(), m12.clone()]);
                 newFaces.push([m20.clone(), m12.clone(), v2.clone()]);
                 newFaces.push([m01.clone(), m12.clone(), m20.clone()]);
-            }
+            });
             faces = newFaces;
         }
 
-        // Step 3: Create hexagonal/pentagonal cells from the vertices of the subdivided icosahedron mesh.
-        // Each vertex of the subdivided mesh will become the center of a hexagonal (or pentagonal) cell.
-        // The vertices of these cells will be the centroids of the triangles surrounding each vertex.
+        const uniqueVertices = new Map<string, THREE.Vector3>();
+        const vertexToFacesMap = new Map<string, THREE.Vector3[][]>();
+        const vertexKeyPrecision = 100000; // Higher precision for identifying unique vertices
 
-        const uniqueVertices = new Map<string, THREE.Vector3>(); // Store unique vertices by string key "x_y_z"
-        const vertexToFacesMap = new Map<string, THREE.Vector3[][]>(); // Map vertex key to list of faces it belongs to
-
-        for (const face of faces) {
-            for (const vertex of face) {
-                const key = `${vertex.x.toFixed(5)}_${vertex.y.toFixed(5)}_${vertex.z.toFixed(5)}`;
-                if (!uniqueVertices.has(key)) {
-                    uniqueVertices.set(key, vertex);
-                }
-                if (!vertexToFacesMap.has(key)) {
-                    vertexToFacesMap.set(key, []);
-                }
+        faces.forEach(face => {
+            face.forEach(vertex => {
+                const key = `${vertex.x.toFixed(6)}_${vertex.y.toFixed(6)}_${vertex.z.toFixed(6)}`; // Slightly higher precision for map key
+                if (!uniqueVertices.has(key)) uniqueVertices.set(key, vertex);
+                if (!vertexToFacesMap.has(key)) vertexToFacesMap.set(key, []);
                 vertexToFacesMap.get(key)!.push(face);
-            }
-        }
+            });
+        });
 
         let cellIdCounter = 0;
         uniqueVertices.forEach((vertexCenter, key) => {
             const surroundingFaces = vertexToFacesMap.get(key)!;
-            const cellVerticesUnitSphere: THREE.Vector3[] = [];
-
-            // Order surrounding face centroids to form the cell polygon
-            // This requires a robust way to sort points around a central point on a sphere.
-            // A common approach is to sort them by angle around the vertexCenter.
             const faceCentroids = surroundingFaces.map(face =>
-                new THREE.Vector3()
-                    .add(face[0])
-                    .add(face[1])
-                    .add(face[2])
-                    .multiplyScalar(1/3)
-                    .normalize()
+                new THREE.Vector3().add(face[0]).add(face[1]).add(face[2]).multiplyScalar(1/3).normalize()
             );
 
-            if (faceCentroids.length < 3) { // Should not happen in a valid subdivided icosahedron
+            if (faceCentroids.length < 3) {
                 console.warn(`Vertex ${key} has only ${faceCentroids.length} surrounding faces. Skipping cell generation.`);
                 return;
             }
 
-            // Sort faceCentroids around vertexCenter.
-            // Project onto a plane tangent to the sphere at vertexCenter for 2D sorting.
             const tangentPlaneNormal = vertexCenter.clone();
-            const arbitraryVector = (Math.abs(tangentPlaneNormal.x) > 0.9) ? new THREE.Vector3(0,1,0) : new THREE.Vector3(1,0,0);
-            const tangentU = new THREE.Vector3().crossVectors(tangentPlaneNormal, arbitraryVector).normalize();
+            const arbitraryVec = (Math.abs(tangentPlaneNormal.x) > 0.9) ? new THREE.Vector3(0,1,0) : new THREE.Vector3(1,0,0);
+            const tangentU = new THREE.Vector3().crossVectors(tangentPlaneNormal, arbitraryVec).normalize();
             const tangentV = new THREE.Vector3().crossVectors(tangentPlaneNormal, tangentU).normalize();
 
             faceCentroids.sort((a, b) => {
-                const aProjected = new THREE.Vector2(a.dot(tangentU), a.dot(tangentV));
-                const bProjected = new THREE.Vector2(b.dot(tangentU), b.dot(tangentV));
-                return Math.atan2(aProjected.y, aProjected.x) - Math.atan2(bProjected.y, bProjected.x);
+                const aProj = new THREE.Vector2(a.dot(tangentU), a.dot(tangentV));
+                const bProj = new THREE.Vector2(b.dot(tangentU), b.dot(tangentV));
+                return Math.atan2(aProj.y, aProj.x) - Math.atan2(bProj.y, bProj.x);
             });
 
             const cell: HexCell = {
                 id: `cell_${cellIdCounter++}`,
                 centerPointUnitSphere: vertexCenter.clone(),
-                verticesUnitSphere: faceCentroids, // These are the vertices of the hex/pentagon cell
+                verticesUnitSphere: faceCentroids,
                 centerPointWorld: vertexCenter.clone().multiplyScalar(this.earthRadius),
                 verticesWorld: faceCentroids.map(v => v.clone().multiplyScalar(this.earthRadius)),
-                neighborIds: [], // To be computed later
+                neighborIds: [],
                 entitiesInCell: [],
+                movementCost: 1.0, // Default movement cost
             };
             this.cells.set(cell.id, cell);
         });
-
-        console.log(`[HexGridManager] Generated ${this.cells.size} hexagonal/pentagonal cells.`);
-
-        // Step 4: Compute neighbor relationships (placeholder)
-        this.computeNeighbors();
+        console.log(`[HexGridManager] Generated ${this.cells.size} cells.`);
     }
 
     private computeNeighbors(): void {
-        // For each cell, find its neighbors.
-        // Two cells are neighbors if they share an edge (i.e., two vertices in their verticesUnitSphere list).
-        // This is computationally intensive if done naively (O(N^2 * V^2)).
-        // A more efficient way is to build an edge map: map pairs of vertex indices (sorted) to the cells sharing that edge.
+        const edgeToCellsMap = new Map<string, string[]>();
 
-        // This is a simplified placeholder. A robust implementation is needed.
-        const allCellIds = Array.from(this.cells.keys());
         this.cells.forEach(cell => {
-            // Naive: check distance between centers (not accurate for shared edges but a rough start)
-            const potentialNeighbors = allCellIds
-                .filter(otherId => otherId !== cell.id)
-                .map(otherId => this.cells.get(otherId)!)
-                .sort((a, b) => cell.centerPointUnitSphere.distanceToSquared(a.centerPointUnitSphere) - cell.centerPointUnitSphere.distanceToSquared(b.centerPointUnitSphere));
+            cell.neighborIds = []; // Clear existing neighbors before recomputing
+            for (let i = 0; i < cell.verticesUnitSphere.length; i++) {
+                const v1 = cell.verticesUnitSphere[i];
+                const v2 = cell.verticesUnitSphere[(i + 1) % cell.verticesUnitSphere.length];
 
-            // Typically, a hex cell has 6 neighbors (or 5 for pentagons at icosahedron vertices)
-            const numNeighbors = cell.verticesUnitSphere.length; // Pentagons or Hexagons
-            for(let i = 0; i < Math.min(numNeighbors, potentialNeighbors.length); i++) {
-                 // This simple distance check is not guaranteed to find true topological neighbors
-                 // A proper check involves finding shared vertices between cell polygons.
-                 // For now, we assume the closest N cell centers are neighbors.
-                const distThreshold = (this.earthRadius / (5 * Math.pow(2, (this.cells.get(potentialNeighbors[i].id)!.verticesUnitSphere.length === 5 ? 0 : 1 )))) * 1.5; // Heuristic threshold
-                // A more robust way: find cells that share at least two vertices.
-                // Iterate over cell's vertices. For each pair of adjacent vertices (edge), find other cell that has same edge.
-                // This is complex. For now, this is a placeholder.
-                // A proper solution involves checking shared vertices between cell polygons.
-                // This distance based approach is a rough approximation and will have errors.
-                // A true adjacency check would iterate through all other cells and see if their `verticesUnitSphere`
-                // share two common vertices with the current cell's `verticesUnitSphere`.
+                const keyV1 = getQuantizedVertexKey(v1);
+                const keyV2 = getQuantizedVertexKey(v2);
+
+                const edgeKey = keyV1 < keyV2 ? `${keyV1}|${keyV2}` : `${keyV2}|${keyV1}`;
+
+                if (!edgeToCellsMap.has(edgeKey)) {
+                    edgeToCellsMap.set(edgeKey, []);
+                }
+                // Avoid adding same cell twice to an edge if vertices are truly identical (quantized)
+                if (!edgeToCellsMap.get(edgeKey)!.includes(cell.id)) {
+                    edgeToCellsMap.get(edgeKey)!.push(cell.id);
+                }
             }
-             // A more robust method:
-            const cellVerticesKeys = new Set(cell.verticesUnitSphere.map(v => `${v.x.toFixed(4)}_${v.y.toFixed(4)}_${v.z.toFixed(4)}`));
-            this.cells.forEach(otherCell => {
-                if (cell.id === otherCell.id) return;
-                let sharedVertices = 0;
-                for (const ov of otherCell.verticesUnitSphere) {
-                    if (cellVerticesKeys.has(`${ov.x.toFixed(4)}_${ov.y.toFixed(4)}_${ov.z.toFixed(4)}`)) {
-                        sharedVertices++;
-                    }
-                }
-                if (sharedVertices >= 2) { // If they share 2 vertices, they share an edge
-                    cell.neighborIds.push(otherCell.id);
-                }
-            });
-
-
         });
-        console.log(`[HexGridManager] Computed (approximate) neighbors for cells.`);
+
+        edgeToCellsMap.forEach(cellIdsOnEdge => {
+            if (cellIdsOnEdge.length === 2) {
+                const cell1 = this.cells.get(cellIdsOnEdge[0]);
+                const cell2 = this.cells.get(cellIdsOnEdge[1]);
+                if (cell1 && cell2) {
+                    if (!cell1.neighborIds.includes(cell2.id)) cell1.neighborIds.push(cell2.id);
+                    if (!cell2.neighborIds.includes(cell1.id)) cell2.neighborIds.push(cell1.id);
+                }
+            } else if (cellIdsOnEdge.length > 2) {
+                // This might indicate an issue with vertex quantization or grid topology if non-manifold edges are not expected.
+                // For this grid generation, it should ideally be 2.
+                console.warn(`Edge shared by more than 2 cells: ${cellIdsOnEdge.join(', ')}`);
+            }
+        });
+        console.log(`[HexGridManager] Computed neighbors for ${this.cells.size} cells.`);
     }
 
     public getCellById(id: string): HexCell | undefined {
         return this.cells.get(id);
     }
 
-    // Method to find the closest cell to a point on the sphere
     public getCellForPoint(worldPoint: THREE.Vector3): HexCell | null {
         if (this.cells.size === 0) return null;
-
         const unitPoint = worldPoint.clone().normalize();
         let closestCell: HexCell | null = null;
         let minDistanceSq = Infinity;
 
-        for (const cell of this.cells.values()) {
+        this.cells.forEach(cell => {
             const distSq = cell.centerPointUnitSphere.distanceToSquared(unitPoint);
             if (distSq < minDistanceSq) {
                 minDistanceSq = distSq;
                 closestCell = cell;
             }
-        }
+        });
         return closestCell;
     }
+
+    // A* Pathfinding Implementation
+    public findPath(startCellId: string, endCellId: string): string[] | null {
+        const startNode = this.cells.get(startCellId);
+        const endNode = this.cells.get(endCellId);
+
+        if (!startNode || !endNode) return null;
+        if (startCellId === endCellId) return [startCellId];
+
+        // Node structure for pathfinding
+        interface PathNode {
+            cellId: string;
+            gCost: number; // Cost from start to this node
+            hCost: number; // Heuristic cost from this node to end
+            fCost: number; // gCost + hCost
+            parentCellId?: string;
+        }
+
+        const openSet = new Map<string, PathNode>(); // cellId -> PathNode
+        const closedSet = new Set<string>(); // cellId
+
+        const calculateHeuristic = (cellA: HexCell, cellB: HexCell): number => {
+            return Math.acos(THREE.MathUtils.clamp(cellA.centerPointUnitSphere.dot(cellB.centerPointUnitSphere), -1, 1));
+        };
+
+        const startPathNode: PathNode = {
+            cellId: startCellId,
+            gCost: 0,
+            hCost: calculateHeuristic(startNode, endNode),
+            fCost: calculateHeuristic(startNode, endNode),
+            parentCellId: undefined
+        };
+        openSet.set(startCellId, startPathNode);
+
+        const cameFrom = new Map<string, string>(); // For path reconstruction: childId -> parentId
+
+        while (openSet.size > 0) {
+            let currentCellId: string | undefined;
+            let lowestFCost = Infinity;
+            openSet.forEach((nodeData, nodeId) => {
+                if (nodeData.fCost < lowestFCost) {
+                    lowestFCost = nodeData.fCost;
+                    currentCellId = nodeId;
+                } else if (nodeData.fCost === lowestFCost) { // Tie-breaking: prefer higher gCost (closer to target)
+                    if (nodeData.gCost > openSet.get(currentCellId!)!.gCost) {
+                        currentCellId = nodeId;
+                    }
+                }
+            });
+
+            if (!currentCellId) break;
+
+            const currentNodeData = openSet.get(currentCellId)!;
+            const currentCell = this.cells.get(currentCellId)!;
+
+            if (currentCellId === endCellId) { // Target found
+                const path: string[] = [currentCellId];
+                let currentTraceId = currentCellId;
+                while (cameFrom.has(currentTraceId)) {
+                    currentTraceId = cameFrom.get(currentTraceId)!;
+                    path.unshift(currentTraceId);
+                }
+                return path;
+            }
+
+            openSet.delete(currentCellId);
+            closedSet.add(currentCellId);
+
+            for (const neighborId of currentCell.neighborIds) {
+                if (closedSet.has(neighborId)) continue;
+
+                const neighborCell = this.cells.get(neighborId);
+                if (!neighborCell) continue;
+
+                const tentativeGCost = currentNodeData.gCost + neighborCell.movementCost;
+
+                let neighborNode = openSet.get(neighborId);
+                if (!neighborNode || tentativeGCost < neighborNode.gCost) {
+                    cameFrom.set(neighborId, currentCellId);
+                    const hCost = calculateHeuristic(neighborCell, endNode);
+                    neighborNode = {
+                        cellId: neighborId,
+                        gCost: tentativeGCost,
+                        hCost: hCost,
+                        fCost: tentativeGCost + hCost,
+                        parentCellId: currentCellId // Kept for potential direct reconstruction if needed, but cameFrom is primary
+                    };
+                    openSet.set(neighborId, neighborNode);
+                }
+            }
+        }
+        return null; // No path found
+    }
 }
-
-// Example Usage (for testing, not part of the class itself)
-// const gridManager = new HexGridManager(2, 1); // Earth radius 2, 1 subdivision
-// console.log(gridManager.cells.values().next().value);
-// const testPoint = new THREE.Vector3(1,1,1).normalize().multiplyScalar(2);
-// console.log("Cell for test point:", gridManager.getCellForPoint(testPoint)?.id);
-
-// Next steps:
-// 1. Refine generateGrid to create actual hexagonal cells from the subdivided icosahedron.
-//    This usually involves taking the vertices of the subdivided triangles as the centers of hexagons,
-//    and the centers of the original triangles (and midpoints of edges) as vertices of the hexagons.
-//    Or, more simply, each triangle of the subdivided icosahedron *is* a cell, and we draw its boundary.
-//    For "hexagonal grid," users usually expect cells with ~6 neighbors.
-// 2. Implement neighbor finding.
-// 3. Integrate into Earth3D for visualization.
-// 4. Integrate into GameEngine for game logic.
