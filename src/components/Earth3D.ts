@@ -1,9 +1,13 @@
 import * as THREE from 'three';
-import { GameState, WorldRegion, RegionEvent, EventType, Faction, Ideology, WeatherCondition, Biome, IEntity } from '../engine/GameEngine';
+// Correctly import PhysicsLayer from GameEngine
+import { GameState, WorldRegion, RegionEvent, EventType, Faction, Ideology, WeatherCondition, Biome, IEntity, PhysicsLayer } from '../engine/GameEngine';
 import SimplexNoise from 'simplex-noise';
 import { SatelliteEntity, ISatelliteDataComponent, DEFAULT_SATELLITE_DATA_COMPONENT_NAME } from '../engine/entities/SatelliteEntity';
 import { ITransformComponent, DEFAULT_TRANSFORM_COMPONENT_NAME } from '../engine/components/TransformComponent';
+// Import IPhysicsPropertiesComponent
+import { IPhysicsPropertiesComponent, DEFAULT_PHYSICS_PROPERTIES_COMPONENT_NAME } from '../engine/components/PhysicsPropertiesComponent';
 import { PHYSICS_TO_VISUAL_SCALE, VectorOps, EARTH_RADIUS_METERS } from '../engine/PhysicsManager';
+import { HexGridManager, HexCell } from '../engine/HexGridManager'; // Import HexGridManager
 
 export interface VisualSatellite {
   id: string;
@@ -36,11 +40,14 @@ export class Earth3D {
   private atmosphere: THREE.Mesh;
   private clouds: THREE.Mesh;
   private cloudMaterial: THREE.MeshStandardMaterial;
+  private hexGridManager: HexGridManager; // Added
+  private hexGridVisuals: THREE.Group = new THREE.Group(); // Added for hex grid lines
 
   private satelliteMeshes: Map<string, THREE.Mesh> = new Map();
   private undergroundMarkers: Map<string, THREE.Object3D> = new Map();
   private airUnitMeshes: Map<string, THREE.Object3D> = new Map();
 
+  // regionMarkers will likely be superseded by hex grid interactions
   private regionMarkers: THREE.Mesh[] = [];
   private eventMarkers: THREE.Mesh[] = [];
   private factionInfluenceOverlay: THREE.Mesh | null = null;
@@ -57,15 +64,17 @@ export class Earth3D {
   private readonly PARTICLE_COUNT = 5000;
   private currentGameState: GameState | null = null;
   
-  public onRegionClick?: (region: WorldRegion, x: number, y: number) => void;
+  public onRegionClick?: (region: WorldRegion, x: number, y: number) => void; // May become legacy
+  public onHexCellClick?: (cell: HexCell, x: number, y: number) => void; // New callback for hex cells
   public onSatelliteClick?: (satelliteId: string, satelliteName: string, satelliteType: ISatelliteDataComponent['satelliteType'], x: number, y: number) => void;
   public onEventClick?: (event: RegionEvent, x: number, y: number) => void;
+  // public onEntityClick?: (entity: IEntity, x: number, y: number) => void; // Future: for clicking any entity
   
   constructor(container: HTMLElement) {
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, (EARTH_RADIUS_METERS * 10) * PHYSICS_TO_VISUAL_SCALE );
-    this.renderer = new THREE.WebGLRenderer({ 
-      antialias: true, 
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
       alpha: true,
       powerPreference: "high-performance"
     });
@@ -73,10 +82,18 @@ export class Earth3D {
     this.setupRenderer(container);
     this.setupCamera();
     this.setupLighting();
-    this.createEarth();
+    this.createEarth(); // Earth visual radius is set here (e.g., 2)
+
+    // Initialize HexGridManager after Earth is created
+    const earthVisualRadius = this.earth.geometry.parameters.radius;
+    // Using 1 subdivision for fewer cells initially, easier to debug. Max 80 cells.
+    // 0 subdivisions = 20 triangular cells. 1 subdivision = 80 triangular cells. 2 = 320.
+    this.hexGridManager = new HexGridManager(earthVisualRadius, 1);
+    this.createHexGridVisuals(); // Create and add hex grid lines to the scene
+
     this.createAtmosphere();
 
-    const cloudGeometry = new THREE.SphereGeometry(this.earth.geometry.parameters.radius + 0.03, 64, 32);
+    const cloudGeometry = new THREE.SphereGeometry(earthVisualRadius + 0.03, 64, 32);
     const cloudCanvas = document.createElement('canvas');
     cloudCanvas.width = 2048;
     cloudCanvas.height = 1024;
@@ -107,38 +124,65 @@ export class Earth3D {
     this.animate();
   }
 
+  private createHexGridVisuals(): void {
+    this.scene.remove(this.hexGridVisuals); // Clear previous visuals if any
+    this.hexGridVisuals.children.forEach(child => {
+        if (child instanceof THREE.LineLoop) {
+            child.geometry.dispose();
+            (child.material as THREE.Material).dispose();
+        }
+    });
+    this.hexGridVisuals.clear(); // Remove all children from the group
+
+    const material = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.15, depthTest: true });
+
+    this.hexGridManager.cells.forEach(cell => {
+        // cell.verticesWorld are already scaled by Earth radius in HexGridManager
+        // Ensure vertices form a closed loop by adding the first vertex at the end if not already.
+        // For LineLoop, this is handled automatically if vertices are in order.
+        const points = [...cell.verticesWorld, cell.verticesWorld[0]]; // Ensure closure for LineSegments if used, good for LineLoop too
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+
+        const line = new THREE.LineLoop(geometry, material); // Not cloning material, using one for all.
+        line.userData = { cellId: cell.id, type: 'hex_cell' }; // For raycasting
+        this.hexGridVisuals.add(line);
+    });
+    this.scene.add(this.hexGridVisuals);
+    console.log(`[Earth3D] Created visuals for ${this.hexGridManager.cells.size} hex cells.`);
+  }
+
   public updateCurrentGameState(gameState: GameState): void {
     this.currentGameState = gameState;
     const allEntities = Array.from(gameState.entities.values());
     this.updateSatelliteVisuals(allEntities);
     this.updateUndergroundVisuals(allEntities);
-    this.updateAirUnitVisuals(allEntities); // Call new method for air units
+    this.updateAirUnitVisuals(allEntities);
     this.updateTerrainConditionVisuals(gameState.biomes, gameState.activeDisasters);
+    // Future: this.updateHexGridDynamicVisuals(gameState);
   }
 
   private updateAirUnitVisuals(entities: IEntity[]): void {
     const currentAirUnitIds = new Set<string>();
 
     entities.forEach(entity => {
-        if (entity.location?.layer === CoreGame.PhysicsLayer.Air) {
+        if (entity.location?.layer === PhysicsLayer.Air) { // Use imported PhysicsLayer
             currentAirUnitIds.add(entity.id);
             const transformComp = entity.getComponent<ITransformComponent>(DEFAULT_TRANSFORM_COMPONENT_NAME);
-            // const physicsProps = entity.getComponent<IPhysicsPropertiesComponent>(DEFAULT_PHYSICS_PROPERTIES_COMPONENT_NAME); // For velocity vector if needed for orientation
 
             if (transformComp) {
                 let mesh = this.airUnitMeshes.get(entity.id);
                 if (!mesh) {
                     // Create a new marker: e.g., a simple wedge or a custom model
-                    const airUnitGeometry = new THREE.ConeGeometry(0.02, 0.08, 4); // Simple wedge/pyramid shape
-                    airUnitGeometry.rotateX(Math.PI / 2); // Orient it to point forward
+                    const airUnitGeometry = new THREE.ConeGeometry(0.02, 0.08, 4);
+                    airUnitGeometry.rotateX(Math.PI / 2);
                     const airUnitMaterial = new THREE.MeshStandardMaterial({
-                        color: 0xadd8e6, // Light blue
+                        color: 0xadd8e6,
                         emissive: 0x446688,
                         roughness: 0.4,
                         metalness: 0.6,
                     });
                     mesh = new THREE.Mesh(airUnitGeometry, airUnitMaterial);
-                    mesh.userData = { id: entity.id, type: 'air_unit' };
+                    mesh.userData = { entityId: entity.id, type: 'air_unit', entityRef: entity }; // Store entity ref
                     this.scene.add(mesh);
                     this.airUnitMeshes.set(entity.id, mesh);
                 }
@@ -147,20 +191,22 @@ export class Earth3D {
                 mesh.position.copy(visualPosition);
 
                 // Orientation: Make the air unit point in the direction of its velocity (if available and significant)
-                // This requires IPhysicsPropertiesComponent to be present and velocity to be meaningful
+                // Use IPhysicsPropertiesComponent for orientation
                 const physicsProps = entity.getComponent<IPhysicsPropertiesComponent>(DEFAULT_PHYSICS_PROPERTIES_COMPONENT_NAME);
                 if (physicsProps && VectorOps.magnitudeSq(physicsProps.velocityMps) > 0.01) {
-                    const velocityDirection = VectorOps.normalize(physicsProps.velocityMps);
-                    // Create a target point slightly ahead in the direction of velocity
-                    const lookAtTarget = VectorOps.add(visualPosition, VectorOps.scale(velocityDirection, 0.1)); // Small offset for lookAt
-                    mesh.lookAt(lookAtTarget.x, lookAtTarget.y, lookAtTarget.z);
+                    const velocityDirectionPhysics = VectorOps.normalize(physicsProps.velocityMps);
+                    const lookAtTargetVisual = VectorOps.add(visualPosition, VectorOps.scale(velocityDirectionPhysics, 0.1 * VISUAL_TO_PHYSICS_SCALE)); // Scale offset appropriately
+                    mesh.lookAt(lookAtTargetVisual.x, lookAtTargetVisual.y, lookAtTargetVisual.z);
                 } else {
-                    // Default orientation if not moving or no velocity data
-                    mesh.lookAt(this.earth.position); // Or some other default like facing north
-                    mesh.rotateX(Math.PI / 2); // Adjust if necessary based on model
+                    const surfaceNormal = visualPosition.clone().normalize();
+                    const defaultForward = new THREE.Vector3(0,1,0);
+                    if (Math.abs(surfaceNormal.dot(defaultForward)) < 0.99 ) {
+                        const tangent = defaultForward.clone().projectOnPlane(surfaceNormal).normalize();
+                        mesh.lookAt(visualPosition.clone().add(tangent));
+                    } else {
+                        mesh.lookAt(visualPosition.x + 1, visualPosition.y, visualPosition.z);
+                    }
                 }
-
-                // Basic visual turbulence in storms (if unit is in a stormy biome)
                 // This requires biome data for the air unit's current location.
                 // For simplicity, this check is omitted for now but could be added if GameState provides easy lookup.
                 // if (isInStormyBiome) {
@@ -189,22 +235,21 @@ export class Earth3D {
     const currentUndergroundEntityIds = new Set<string>();
 
     entities.forEach(entity => {
-        if (entity.location?.layer === CoreGame.PhysicsLayer.Underground) {
+        if (entity.location?.layer === PhysicsLayer.Underground) { // Use imported PhysicsLayer
             currentUndergroundEntityIds.add(entity.id);
             const transformComp = entity.getComponent<ITransformComponent>(DEFAULT_TRANSFORM_COMPONENT_NAME);
 
             if (transformComp) {
                 let marker = this.undergroundMarkers.get(entity.id);
                 if (!marker) {
-                    // Create a new marker: e.g., a small, downward-pointing cone or a sprite
-                    const markerGeometry = new THREE.ConeGeometry(0.03, 0.06, 8); // Small cone
+                    const markerGeometry = new THREE.ConeGeometry(0.03, 0.06, 8);
                     const markerMaterial = new THREE.MeshStandardMaterial({
-                        color: 0x8B4513, // Brownish
+                        color: 0x8B4513,
                         emissive: 0x3a1f0a,
                         roughness: 0.7,
                     });
                     marker = new THREE.Mesh(markerGeometry, markerMaterial);
-                    marker.userData = { id: entity.id, type: 'underground_marker' };
+                    marker.userData = { entityId: entity.id, type: 'underground_marker', entityRef: entity }; // Store entity ref
                     this.scene.add(marker);
                     this.undergroundMarkers.set(entity.id, marker);
                 }
@@ -637,38 +682,72 @@ export class Earth3D {
       this.mouse.x = (event.clientX / container.clientWidth) * 2 - 1;
       this.mouse.y = -(event.clientY / container.clientHeight) * 2 + 1;
       this.raycaster.setFromCamera(this.mouse, this.camera);
-      
-      const satelliteMeshesForRaycast = Array.from(this.satelliteMeshes.values());
-      const satelliteIntersects = this.raycaster.intersectObjects(satelliteMeshesForRaycast);
-      
-      if (satelliteIntersects.length > 0) {
-        const satelliteMesh = satelliteIntersects[0].object as THREE.Mesh;
-        const satelliteId = satelliteMesh.userData.id;
-        const satelliteName = satelliteMesh.userData.name;
-        const satelliteType = satelliteMesh.userData.type;
 
-        if (satelliteId && this.onSatelliteClick) {
-          this.onSatelliteClick(satelliteId, satelliteName, satelliteType, event.clientX, event.clientY);
-        }
-        return;
-      }
+      const clickableObjects: THREE.Object3D[] = [this.earth];
+      this.satelliteMeshes.forEach(mesh => clickableObjects.push(mesh));
+      this.airUnitMeshes.forEach(mesh => clickableObjects.push(mesh as THREE.Mesh));
+      this.undergroundMarkers.forEach(mesh => clickableObjects.push(mesh as THREE.Mesh));
       
-      const earthIntersects = this.raycaster.intersectObject(this.earth);
-      if (earthIntersects.length > 0) {
-        const point = earthIntersects[0].point;
-        const region = this.getRegionFromPoint(point);
-        if (region && this.onRegionClick) {
-          this.onRegionClick(region, event.clientX, event.clientY);
+      // Add hex grid lines to clickable objects if the group exists and has children
+      if (this.hexGridVisuals && this.hexGridVisuals.children.length > 0) {
+        // Raycasting against lines can be tricky / less precise.
+        // Consider making hexes actual (transparent) meshes for better raycasting if lines are problematic.
+        // For now, we add the lines themselves.
+        clickableObjects.push(...this.hexGridVisuals.children);
+      }
+      // TODO: Add other entity meshes (ground units, buildings) when they are implemented
+
+      const intersects = this.raycaster.intersectObjects(clickableObjects, true); // true for recursive
+
+      if (intersects.length > 0) {
+        const firstIntersect = intersects[0];
+        const clickedObject = firstIntersect.object;
+        const userData = clickedObject.userData;
+
+        if (userData) {
+          if (userData.type === 'satellite' && userData.id && this.onSatelliteClick) {
+            this.onSatelliteClick(userData.id, userData.name, userData.type, event.clientX, event.clientY);
+            return;
+          } else if ((userData.type === 'air_unit' || userData.type === 'underground_marker') && userData.entityRef) {
+            // Placeholder for general entity click
+            console.log(`Clicked ${userData.type}: ID ${userData.entityId}`, userData.entityRef);
+            // if (this.onEntityClick) this.onEntityClick(userData.entityRef, event.clientX, event.clientY);
+            return;
+          } else if (userData.type === 'hex_cell' && userData.cellId && this.onHexCellClick) {
+            const cell = this.hexGridManager.getCellById(userData.cellId);
+            if (cell) {
+                this.onHexCellClick(cell, event.clientX, event.clientY);
+            }
+            return;
+          }
+        }
+
+        // If the Earth itself was the first thing hit (e.g., clicked on ocean where no specific hex line was intersected first)
+        // or if a hex line was hit but didn't propagate up to a higher level handler.
+        if (clickedObject === this.earth && this.onHexCellClick) {
+            const point = firstIntersect.point; // Intersection point on the Earth mesh
+            const cell = this.hexGridManager.getCellForPoint(point); // Find cell based on world coordinates
+            if (cell) {
+                this.onHexCellClick(cell, event.clientX, event.clientY);
+            } else if (this.onRegionClick) { // Fallback to legacy region click if no cell found (should be rare)
+                const region = this.getRegionFromPoint_Legacy(point);
+                if (region) {
+                    this.onRegionClick(region, event.clientX, event.clientY);
+                }
+            }
+            return; // Handled Earth click
         }
       }
     });
   }
   
-  private getRegionFromPoint(point: THREE.Vector3): WorldRegion | null {
-    const spherePoint = point.clone().normalize().multiplyScalar(2.0);
-    const lat = Math.asin(spherePoint.y / 2.0);
+  // Renamed as hex grid is now primary
+  private getRegionFromPoint_Legacy(point: THREE.Vector3): WorldRegion | null {
+    const spherePoint = point.clone().normalize().multiplyScalar(this.earth.geometry.parameters.radius);
+    const lat = Math.asin(spherePoint.y / this.earth.geometry.parameters.radius);
     const lon = Math.atan2(spherePoint.x, spherePoint.z);
 
+    // Example for North America, adjust as needed or remove if fully hex-based
     if (lon > -2.0 && lon < -0.5 && lat > 0.2 && lat < 1.0) return { id: 'na', name: 'North America' } as WorldRegion;
     return null;
   }
@@ -676,13 +755,16 @@ export class Earth3D {
   private animate = () => {
     this.animationId = requestAnimationFrame(this.animate);
     
-    this.earth.rotation.y += 0.0005 * (this.currentGameState?.speed || 1);
+    const rotationAmount = 0.0005 * (this.currentGameState?.speed || 1);
+    this.earth.rotation.y += rotationAmount;
     this.atmosphere.rotation.y = this.earth.rotation.y;
-    this.clouds.rotation.y += 0.0006 * (this.currentGameState?.speed || 1);
+    this.clouds.rotation.y += rotationAmount * 1.1; // Clouds rotate slightly faster
 
+    // Rotate overlays and hex grid with the earth
     if (this.factionInfluenceOverlay) this.factionInfluenceOverlay.rotation.copy(this.earth.rotation);
     if (this.factionHQLayer) this.factionHQLayer.rotation.copy(this.earth.rotation);
     if (terrainConditionOverlay) terrainConditionOverlay.rotation.copy(this.earth.rotation);
+    if (this.hexGridVisuals) this.hexGridVisuals.rotation.copy(this.earth.rotation); // Rotate hex grid
     
     if (this.currentGameState) {
       this.updateWeatherVisuals(this.currentGameState);
@@ -1105,13 +1187,57 @@ export class Earth3D {
     this.rainParticles?.geometry.dispose(); this.snowParticles?.geometry.dispose();
     this.satelliteMeshes.forEach(mesh => {
         if(mesh.geometry) mesh.geometry.dispose();
-        if(mesh.material) (mesh.material as THREE.Material).dispose();
+        // Ensure material is an array or single material before disposing
+        const satMat = mesh.material as THREE.Material | THREE.Material[];
+        if (Array.isArray(satMat)) { satMat.forEach(m => m.dispose()); } else { satMat.dispose(); }
     });
-    if (terrainConditionOverlay && terrainConditionOverlay.material instanceof THREE.MeshBasicMaterial && terrainConditionOverlay.material.map) { // Check type before casting
-        (terrainConditionOverlay.material.map as THREE.CanvasTexture).dispose();
-    } else if (terrainConditionOverlay && terrainConditionOverlay.material instanceof THREE.MeshStandardMaterial && terrainConditionOverlay.material.map) {
-        (terrainConditionOverlay.material.map as THREE.CanvasTexture).dispose();
+    this.satelliteMeshes.clear();
+
+    this.airUnitMeshes.forEach(mesh => {
+        if((mesh as THREE.Mesh).geometry) ((mesh as THREE.Mesh).geometry as THREE.BufferGeometry).dispose();
+        const mat = (mesh as THREE.Mesh).material as THREE.Material | THREE.Material[];
+        if (Array.isArray(mat)) { mat.forEach(m => m.dispose()); } else { mat.dispose(); }
+    });
+    this.airUnitMeshes.clear();
+
+    this.undergroundMarkers.forEach(marker => {
+        if((marker as THREE.Mesh).geometry) ((marker as THREE.Mesh).geometry as THREE.BufferGeometry).dispose();
+        const mat = (marker as THREE.Mesh).material as THREE.Material | THREE.Material[];
+        if (Array.isArray(mat)) { mat.forEach(m => m.dispose()); } else { mat.dispose(); }
+    });
+    this.undergroundMarkers.clear();
+
+    // Dispose hex grid visuals
+    if (this.hexGridVisuals) {
+        this.hexGridVisuals.children.forEach(child => {
+            if (child instanceof THREE.LineLoop) {
+                child.geometry.dispose();
+                (child.material as THREE.Material).dispose();
+            }
+        });
+        this.hexGridVisuals.clear();
+        this.scene.remove(this.hexGridVisuals); // Remove from scene
     }
-    if (terrainConditionOverlay?.geometry) terrainConditionOverlay.geometry.dispose();
+
+    // Dispose overlay textures and materials
+    if (terrainConditionOverlay) {
+        if (terrainConditionOverlay.material instanceof THREE.MeshBasicMaterial && terrainConditionOverlay.material.map) {
+            (terrainConditionOverlay.material.map as THREE.CanvasTexture).dispose();
+        } else if (terrainConditionOverlay.material instanceof THREE.MeshStandardMaterial && terrainConditionOverlay.material.map) {
+            (terrainConditionOverlay.material.map as THREE.CanvasTexture).dispose();
+        }
+        if (terrainConditionOverlay.geometry) terrainConditionOverlay.geometry.dispose();
+        if (terrainConditionOverlay.material) (terrainConditionOverlay.material as THREE.Material | THREE.Material[]).dispose();
+        this.scene.remove(terrainConditionOverlay);
+    }
+     if (this.factionInfluenceOverlay) {
+        if (this.factionInfluenceOverlay.material instanceof THREE.MeshBasicMaterial && this.factionInfluenceOverlay.material.map) {
+           (this.factionInfluenceOverlay.material.map as THREE.CanvasTexture).dispose();
+        }
+        if (this.factionInfluenceOverlay.geometry) this.factionInfluenceOverlay.geometry.dispose();
+        if (this.factionInfluenceOverlay.material) (this.factionInfluenceOverlay.material as THREE.Material).dispose();
+        this.scene.remove(this.factionInfluenceOverlay);
+    }
+    // Dispose other scene elements, materials, geometries...
   }
 }

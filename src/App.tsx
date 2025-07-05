@@ -285,12 +285,6 @@ export default function GlobalCrisisSimulator() {
     setGameState(newState);
   }, [gameState]);
   
-  const handleModeChange = useCallback((mode: 'chaos' | 'peace' | 'neutral') => {
-    if (!gameState) return;
-    setGameState({ ...gameState, mode });
-    audioRef.current?.playAlert('success');
-  }, [gameState]);
-  
   const handleSpeedChange = useCallback((speed: number) => {
     if (!gameState) return;
     setGameState({ ...gameState, speed });
@@ -341,7 +335,6 @@ export default function GlobalCrisisSimulator() {
       <TacticalOverlay
         gameState={gameState}
         factions={gameState.factions} // Pass factions to TacticalOverlay
-        onModeChange={handleModeChange}
         onSpeedChange={handleSpeedChange}
         onTogglePlay={handleTogglePlay}
         onReset={handleReset}
@@ -358,20 +351,6 @@ export default function GlobalCrisisSimulator() {
         onClose={() => setContextMenu(prev => ({ ...prev, visible: false }))}
         onAction={handleContextMenuAction}
       />
-      
-      {/* Emergency Alert System */}
-      {gameState.globalSuffering > 80 && (
-        <div className="absolute inset-0 pointer-events-none z-30">
-          <div className="absolute inset-0 bg-red-500/10 animate-pulse" />
-          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-            <div className="bg-red-900/90 border-2 border-red-500 rounded-lg p-6 text-center backdrop-blur-sm">
-              <AlertTriangle className="w-12 h-12 text-red-400 mx-auto mb-2 animate-bounce" />
-              <div className="text-red-400 military-font text-2xl mb-2">GLOBAL CRISIS</div>
-              <div className="text-white text-sm">Suffering levels critical: {gameState.globalSuffering.toFixed(1)}%</div>
-            </div>
-          </div>
-        </div>
-      )}
       
       {/* Scan Lines Effect */}
       <div className="absolute inset-0 pointer-events-none z-20">
