@@ -1,66 +1,78 @@
-import type { GameState, Location } from '../GameEngine'; // Assuming Location is still in GameEngine or moved appropriately
+import type { GameState, Location, Identifiable, EntityId, FactionId, ComponentType } from '../GameEngine';
 import type { IComponent } from '../components/BaseComponent';
 
-// Re-define Entity interface here or import from a central types file if created
 export interface IEntity extends Identifiable {
+  id: EntityId;
   entityType: string;
-  factionId?: string;
+  factionId?: FactionId;
   location: Location;
-  components: Map<string, IComponent>;
-  update(gameState: GameState, deltaTime: number): void;
+  components: Map<ComponentType, IComponent>;
+
+  update(gameState: Readonly<GameState>, deltaTime: number): void;
   addComponent(component: IComponent): void;
-  getComponent<T extends IComponent>(type: string): T | undefined;
-  removeComponent(type: string): boolean;
-  hasComponent(type: string): boolean;
-  init?(): void; // Optional initialization
+  getComponent<T extends IComponent>(componentType: ComponentType): T | undefined;
+  removeComponent(componentType: ComponentType): boolean;
+  hasComponent(componentType: ComponentType): boolean;
+  onAddedToGame?(gameState: Readonly<GameState>): void;
+  onRemovedFromGame?(gameState: Readonly<GameState>): void;
+  handleEvent?(eventName: string, data?: any): void;
 }
 
-interface Identifiable { id: string; name: string; }
 
-
-export class BaseEntity implements IEntity {
-  public readonly id: string;
+export abstract class BaseEntity implements IEntity {
+  public readonly id: EntityId;
   public name: string;
   public readonly entityType: string;
-  public factionId?: string;
+  public factionId?: FactionId;
   public location: Location;
-  public components: Map<string, IComponent>;
+  public components: Map<ComponentType, IComponent>;
 
-  constructor(id: string, name: string, entityType: string, location: Location, factionId?: string) {
+  constructor(id: EntityId, name: string, entityType: string, initialLocation: Location, factionId?: FactionId) {
     this.id = id;
     this.name = name;
     this.entityType = entityType;
-    this.location = location;
+    this.location = initialLocation;
     this.factionId = factionId;
-    this.components = new Map();
+    this.components = new Map<ComponentType, IComponent>();
   }
 
   public addComponent(component: IComponent): void {
-    component.entityId = this.id; // Ensure component knows its parent
+    if (component.entityId && component.entityId !== this.id) {
+      console.warn(`Component ${component.type} is being reassigned from entity ${component.entityId} to ${this.id}. This might indicate an issue.`);
+    }
+    component.entityId = this.id;
     this.components.set(component.type, component);
-    if (component.init) {
-      component.init();
+    if (component.onAddedToEntity) {
+      component.onAddedToEntity();
     }
   }
 
-  public getComponent<T extends IComponent>(type: string): T | undefined {
-    return this.components.get(type) as T | undefined;
+  public getComponent<T extends IComponent>(componentType: ComponentType): T | undefined {
+    return this.components.get(componentType) as T | undefined;
   }
 
-  public removeComponent(type: string): boolean {
-    return this.components.delete(type);
+  public removeComponent(componentType: ComponentType): boolean {
+    const component = this.components.get(componentType);
+    if (component) {
+      if (component.onRemovedFromEntity) {
+        component.onRemovedFromEntity();
+      }
+      return this.components.delete(componentType);
+    }
+    return false;
   }
 
-  public hasComponent(type: string): boolean {
-    return this.components.has(type);
+  public hasComponent(componentType: ComponentType): boolean {
+    return this.components.has(componentType);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  public update(gameState: GameState, deltaTime: number): void {
+  public update(gameState: Readonly<GameState>, deltaTime: number): void {
     for (const component of this.components.values()) {
       component.update(gameState, deltaTime);
     }
   }
 
-  public init?(): void;
+  public onAddedToGame?(gameState: Readonly<GameState>): void;
+  public onRemovedFromGame?(gameState: Readonly<GameState>): void;
+  public handleEvent?(eventName: string, data?: any): void;
 }

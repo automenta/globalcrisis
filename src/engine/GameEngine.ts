@@ -156,6 +156,7 @@ import { WeatherManager } from './WeatherManager';
 import { DisasterManager } from './DisasterManager';
 import { TechManager } from './TechManager';
 import { TerritoryManager } from './TerritoryManager';
+import { GeoBiomeManager } from './GeoBiomeManager'; // Import GeoBiomeManager
 class PhysicsManager { constructor(private gs: GameState) {} public update(dt: number) { /* TODO: Implement physics updates for entities */ } }
 
 class EconomyManager {

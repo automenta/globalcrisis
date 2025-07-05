@@ -1,23 +1,30 @@
-import type { GameState } from '../GameEngine'; // Assuming GameState is in GameEngine.ts
+import type { GameState, EntityId, ComponentType } from '../GameEngine';
 
 export interface IComponent {
-  type: string;
-  entityId: string; // Will be set when component is added to an entity
-  update(gameState: GameState, deltaTime: number): void;
-  init?(): void; // Optional initialization method
+  type: ComponentType;
+  entityId: EntityId;
+
+  onAddedToEntity?(): void;
+  onRemovedFromEntity?(): void;
+  update(gameState: Readonly<GameState>, deltaTime: number): void;
+  onEntityAddedToGame?(gameState: Readonly<GameState>): void;
+  onEntityRemovedFromGame?(gameState: Readonly<GameState>): void;
+  handleEntityEvent?(eventName: string, data?: any, gameState?: Readonly<GameState>): void;
 }
 
 export abstract class BaseComponent implements IComponent {
-  public abstract readonly type: string;
-  public entityId!: string; // Definite assignment assertion, will be set by Entity
+  public abstract readonly type: ComponentType;
+  public entityId!: EntityId;
 
   constructor() {}
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  public update(gameState: GameState, deltaTime: number): void {
-    // Base components might not have a complex update logic themselves,
-    // but concrete components will override this.
-  }
+  public onAddedToEntity?(): void;
+  public onRemovedFromEntity?(): void;
 
-  public init?(): void;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  public update(gameState: Readonly<GameState>, deltaTime: number): void {}
+
+  public onEntityAddedToGame?(gameState: Readonly<GameState>): void;
+  public onEntityRemovedFromGame?(gameState: Readonly<GameState>): void;
+  public handleEntityEvent?(eventName: string, data?: any, gameState?: Readonly<GameState>): void;
 }

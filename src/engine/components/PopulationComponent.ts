@@ -1,126 +1,88 @@
 import { BaseComponent, IComponent } from './BaseComponent';
-import type { GameState, PopulationStats } from '../GameEngine'; // Assuming PopulationStats is in GameEngine
+import type { GameState, PopulationSegment } from '../GameEngine'; // Changed PopulationStats to PopulationSegment
+import type { IResourceStorageComponent } from "./ResourceStorageComponent";
 
 export interface IPopulationComponent extends IComponent {
-  stats: PopulationStats;
-  // Add any methods specific to population interaction if needed
+  // stats: PopulationStats; // Old
+  segments: Map<string, PopulationSegment>; // New: Can have multiple segments (e.g. different demographics, species)
+  addSegment(segment: PopulationSegment): void;
+  getSegment(segmentId: string): PopulationSegment | undefined;
+  getTotalPopulation(): number;
 }
 
 export class PopulationComponent extends BaseComponent implements IPopulationComponent {
   public readonly type = 'PopulationComponent';
-  public stats: PopulationStats;
+  // public stats: PopulationStats; // Old
+  public segments: Map<string, PopulationSegment> = new Map();
 
-  // Growth rate is defined as a daily rate.
-  // The update method will scale it by deltaTime (assumed to be in seconds).
-import type { IResourceStorageComponent } from "./ResourceStorageComponent"; // For checking food
+  private static readonly DEFAULT_DAILY_GROWTH_RATE = 0.0001;
+  private static readonly SECONDS_PER_DAY = 86400;
 
-  private static readonly DEFAULT_DAILY_GROWTH_RATE = 0.0001; // e.g., 0.01% daily growth
-  private static readonly SECONDS_PER_DAY = 86400; // 24 * 60 * 60
-
-  private lowMoraleDuration: number = 0; // Tracks duration of low morale in game seconds
-
-  constructor(
-    initialPopulation: number,
-    initialMorale: number = 70,
-    initialHealthScore: number = 75,
-    initialUnrest: number = 0, // Default unrest
-    dailyGrowthRateInput?: number
-  ) {
+  // Constructor might change to accept initial segments or a factory for segments
+  constructor(initialSegments?: PopulationSegment[]) {
     super();
-    const actualDailyGrowthRate = dailyGrowthRateInput !== undefined ? dailyGrowthRateInput : PopulationComponent.DEFAULT_DAILY_GROWTH_RATE;
-    this.stats = {
-      total: initialPopulation,
-      growthRate: actualDailyGrowthRate,
-      morale: initialMorale,
-      healthScore: initialHealthScore,
-      unrest: initialUnrest,
-    };
+    if (initialSegments) {
+      initialSegments.forEach(seg => this.addSegment(seg));
+    }
   }
 
-  public update(gameState: GameState, deltaTime: number): void {
+  public addSegment(segment: PopulationSegment): void {
+    this.segments.set(segment.id, segment);
+  }
+
+  public getSegment(segmentId: string): PopulationSegment | undefined {
+    return this.segments.get(segmentId);
+  }
+
+  public getTotalPopulation(): number {
+    let total = 0;
+    this.segments.forEach(seg => total += seg.totalPopulation);
+    return Math.floor(total);
+  }
+
+  public update(gameState: Readonly<GameState>, deltaTime: number): void {
     const parentEntity = gameState.entities.get(this.entityId);
     if (!parentEntity) return;
-    const gameSpeedAdjustedDeltaTime = deltaTime * gameState.speed;
+    const gameSpeedAdjustedDeltaTime = deltaTime * gameState.gameSpeedMultiplier;
 
-    // 1. Update Health Score
-    // Health is affected by food availability.
-    // This is a simplified model. Needs extension for housing, pollution, disease etc.
-    let foodModifier = 0;
-    if (parentEntity.entityType === 'CityEntity') {
-        const storage = parentEntity.getComponent<IResourceStorageComponent>('ResourceStorageComponent');
-        if (storage) {
-            const foodAmount = storage.getResourceAmount('food');
-            const foodConsumptionRate = this.stats.total * 0.005 * (deltaTime * gameState.speed / PopulationComponent.SECONDS_PER_DAY); // daily consumption per capita
+    this.segments.forEach(segment => {
+      // Simplified update logic for each segment
+      // 1. Update Health Score (example logic, needs to be more robust using segment.needs)
+      let foodModifier = 0;
+      const foodNeed = segment.needs.get('food'); // Assuming 'food' is a ResourceId and a needId
+      if (foodNeed) {
+        if (foodNeed.currentFulfillment > 0.8) foodModifier = 0.1;
+        else if (foodNeed.currentFulfillment < 0.2) foodModifier = -0.5;
+        else foodModifier = -0.1; // Moderate lack
+      } else {
+        foodModifier = -0.05; // No defined food need, slight penalty or neutral
+      }
+      segment.healthScore += foodModifier * gameSpeedAdjustedDeltaTime;
+      segment.healthScore = Math.max(0, Math.min(100, segment.healthScore));
 
-            if (foodAmount >= foodConsumptionRate * 30) { // Ample food (e.g. >30 days supply)
-                foodModifier = 0.1;
-            } else if (foodAmount < foodConsumptionRate * 7 && foodAmount > 0) { // Low food (<7 days supply)
-                foodModifier = -0.2;
-            } else if (foodAmount === 0 && this.stats.total > 0) { // No food
-                foodModifier = -0.5;
-            }
-             // Simulate food consumption by the population (basic)
-            // storage.removeResource('food', foodConsumptionRate * this.stats.total); // this needs to be thought out, consumption is tricky.
-            // Let's assume consumption is handled by demand calculation in EconomyManager or a dedicated NeedsManager.
-            // For now, health reacts to available stock.
-        } else {
-            foodModifier = -0.1; // No storage implies no food
-        }
-    }
-    this.stats.healthScore += foodModifier * gameSpeedAdjustedDeltaTime; // Slow change
-    this.stats.healthScore = Math.max(0, Math.min(100, this.stats.healthScore));
+      // 2. Update Morale
+      const healthEffectOnMorale = (segment.healthScore - 50) / 500;
+      segment.baseMorale += healthEffectOnMorale * gameSpeedAdjustedDeltaTime;
+      segment.baseMorale -= (segment.baseUnrest / 1000) * gameSpeedAdjustedDeltaTime;
+      segment.baseMorale = Math.max(0, Math.min(100, segment.baseMorale));
 
-    // 2. Update Morale based on health and other factors
-    const healthEffectOnMorale = (this.stats.healthScore - 50) / 500;
-    this.stats.morale += healthEffectOnMorale * gameSpeedAdjustedDeltaTime;
-    // Unrest also affects morale negatively
-    this.stats.morale -= (this.stats.unrest / 1000) * gameSpeedAdjustedDeltaTime; // Max -0.1 change from unrest
-    this.stats.morale = Math.max(0, Math.min(100, this.stats.morale));
+      // 3. Update Unrest (simplified)
+      if (segment.baseMorale < 30) segment.baseUnrest += 0.05 * gameSpeedAdjustedDeltaTime;
+      else if (segment.baseMorale > 70) segment.baseUnrest -= 0.025 * gameSpeedAdjustedDeltaTime;
+      segment.baseUnrest = Math.max(0, Math.min(100, segment.baseUnrest));
 
-    // 3. Update Unrest based on morale
-    const lowMoraleThreshold = 30;
-    const highMoraleThreshold = 70;
-    const unrestChangeRate = 0.05; // Rate at which unrest changes per second of gameSpeedAdjustedDeltaTime
+      // 4. Update Population Total
+      const healthMultiplier = 0.1 + (segment.healthScore / 100) * 1.1;
+      const moraleMultiplier = 0.5 + (segment.baseMorale / 100) * 0.7;
+      // segment.growthRate is per segment, could be based on age demographics etc.
+      const segmentGrowthRatePerSecond = (segment.growthRate || PopulationComponent.DEFAULT_DAILY_GROWTH_RATE) / PopulationComponent.SECONDS_PER_DAY;
 
-    if (this.stats.morale < lowMoraleThreshold) {
-        this.lowMoraleDuration += gameSpeedAdjustedDeltaTime;
-        if (this.lowMoraleDuration > PopulationComponent.SECONDS_PER_DAY * 3) { // If morale low for >3 days
-            this.stats.unrest += unrestChangeRate * gameSpeedAdjustedDeltaTime;
-        }
-    } else {
-        this.lowMoraleDuration = 0; // Reset duration if morale recovers
-        if (this.stats.morale > highMoraleThreshold) {
-            this.stats.unrest -= unrestChangeRate * gameSpeedAdjustedDeltaTime * 0.5; // Unrest decreases slower
-        }
-    }
-    this.stats.unrest = Math.max(0, Math.min(100, this.stats.unrest));
+      const finalPerSecondGrowthRate = segmentGrowthRatePerSecond * healthMultiplier * moraleMultiplier;
+      const effectiveGrowth = segment.totalPopulation * finalPerSecondGrowthRate * gameSpeedAdjustedDeltaTime;
+      segment.totalPopulation += effectiveGrowth;
 
-    // 4. Update Population Total based on growth rate, which is affected by health and morale (and unrest indirectly via morale)
-    const basePerSecondGrowthRate = this.stats.growthRate / PopulationComponent.SECONDS_PER_DAY;
-
-    // Health impact: perfect health = 1.2x growth, 0 health = 0.1x growth (or negative)
-    const healthMultiplier = 0.1 + (this.stats.healthScore / 100) * 1.1;
-    // Morale impact: perfect morale = 1.2x growth, 0 morale = 0.5x growth
-    const moraleMultiplier = 0.5 + (this.stats.morale / 100) * 0.7;
-
-    const finalPerSecondGrowthRate = basePerSecondGrowthRate * healthMultiplier * moraleMultiplier;
-
-    const effectiveGrowth = this.stats.total * finalPerSecondGrowthRate * deltaTime * gameState.speed;
-    this.stats.total += effectiveGrowth;
-
-    if (this.stats.total < 0) this.stats.total = 0; // Population cannot be negative
-    if (this.stats.total < 1 && this.stats.total > 0) this.stats.total = 0; // Effectively kill city if pop drops too low
-
-    // if (parentEntity.id === 'city_01' && Math.random() < 0.01) { // Debug log for a specific city occasionally
-    //     console.log(`City ${parentEntity.id}: Pop=${this.stats.total.toFixed(0)}, Morale=${this.stats.morale.toFixed(1)}, Health=${this.stats.healthScore.toFixed(1)}, Growth/s=${(effectiveGrowth/(deltaTime * gameState.speed)).toExponential(2)}`);
-    // }
-  }
-
-  public getPopulation(): number {
-    return Math.floor(this.stats.total); // Return whole numbers for population
-  }
-
-  public setMorale(newMorale: number): void {
-    this.stats.morale = Math.max(0, Math.min(100, newMorale));
+      if (segment.totalPopulation < 1 && segment.totalPopulation > 0) segment.totalPopulation = 0;
+      else if (segment.totalPopulation < 0) segment.totalPopulation = 0;
+    });
   }
 }
