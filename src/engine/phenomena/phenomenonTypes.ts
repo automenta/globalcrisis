@@ -24,14 +24,14 @@ export interface MrnaTransfectionEffectsData {
   placeboRatio: number;
   targetHexId: string;
   // Resulting effects (can be stored on the phenomenon instance or applied immediately)
-  intendedEffectMagnitude?: number;
-  autoimmuneEffectMagnitude?: number;
-  organStressEffectMagnitude?: number;
-  fatalityRate?: number;
-  // Flags for indirect effects that might be triggered subsequently
-  triggeredSexualSpread?: boolean;
-  triggeredFertilityDecrease?: boolean;
-  triggeredReverseTranscriptase?: boolean;
+  intendedEffectMagnitude?: number; // Initial calculated positive health effect
+  autoimmuneEffectMagnitude?: number; // Magnitude of negative autoimmune response
+  organStressEffectMagnitude?: number; // Magnitude of organ stress/damage
+  fatalityRate?: number; // Chance of death from this specific transfection event
+  // Flags for indirect effects that might be triggered subsequently by GameEngine logic
+  canTriggerSexualSpread?: boolean; // Likelihood or flag that this variant can spread sexually
+  canTriggerFertilityDecrease?: boolean; // Likelihood or flag that this variant can decrease fertility
+  canTriggerReverseTranscriptase?: boolean; // Likelihood or flag for reverse transcriptase activity
 }
 
 export interface RiotsData {
@@ -47,6 +47,12 @@ export interface RespiratorInducedArdsData {
 export interface WhistleblowerLeakSpawnData {
   spawnLocationHexId: string;
   credibilityMinMax: [number, number]; // Range for the spawned whistleblower
+}
+
+export interface DistrustInDoctorsData {
+  targetHexId: string; // Hex where distrust is centered (likely hospital location)
+  intensity: number; // 0-1, severity of distrust
+  sourceEvent?: 'misdiagnosis_wave' | 'experiment_side_effects' | 'propaganda'; // Optional: what triggered it
 }
 
 
@@ -121,6 +127,78 @@ export function createRiotPhenomenon(
         ),
         parameters: data,
         targetId: targetHexId,
+    };
+}
+
+/**
+ * Represents an active distrust in doctors event.
+ */
+export function createDistrustInDoctorsPhenomenon(
+    targetHexId: string,
+    intensity: number,
+    durationTicks: number = 25, // Lasts for some time
+    sourceEvent?: DistrustInDoctorsData['sourceEvent']
+): IPhenomenon {
+    const data: DistrustInDoctorsData = { targetHexId, intensity, sourceEvent };
+    return {
+        ...createBasePhenomenon(
+            PHENOMENON_DISTRUST_IN_DOCTORS,
+            'hex_tile',
+            // Triggered by conditions (handled by PhenomenonManager or specific actions)
+            { type: 'conditional', condition: `various_medical_negative_events_in_${targetHexId}`},
+            "Distrust in Doctors Spreads",
+            `Growing distrust in medical professionals in ${targetHexId}.`,
+            durationTicks
+        ),
+        parameters: data,
+        targetId: targetHexId,
+    };
+}
+
+/**
+ * Represents an outbreak of ARDS due to respirator use.
+ */
+export function createRespiratorInducedArdsPhenomenon(
+    targetHexId: string, // Hospital location or region
+    numberOfCases: number,
+    durationTicks: number = 15 // ARDS event has an acute phase
+): IPhenomenon {
+    const data: RespiratorInducedArdsData = { targetHexId, numberOfCases };
+    return {
+        ...createBasePhenomenon(
+            PHENOMENON_RESPIRATOR_INDUCED_ARDS,
+            'hex_tile',
+            // Triggered by specific conditions, e.g., FundHospitalAction or high ventilator usage.
+            { type: 'conditional', condition: `high_ventilator_usage_in_${targetHexId}`},
+            "Respirator-Induced ARDS Outbreak",
+            `An outbreak of ARDS linked to respirator use in ${targetHexId}.`,
+            durationTicks
+        ),
+        parameters: data,
+        targetId: targetHexId,
+    };
+}
+
+/**
+ * Represents an event that can spawn a Whistleblower entity.
+ */
+export function createWhistleblowerLeakPhenomenon(
+    spawnLocationHexId: string,
+    credibilityMinMax: [number, number] = [0.3, 0.7], // Default credibility range
+    durationTicks: number = 1 // Typically an instantaneous event that triggers an entity
+): IPhenomenon {
+    const data: WhistleblowerLeakSpawnData = { spawnLocationHexId, credibilityMinMax };
+    return {
+        ...createBasePhenomenon(
+            PHENOMENON_WHISTLEBLOWER_LEAKS,
+            'hex_tile', // The leak originates from a location
+            { type: 'conditional', condition: "high_suspicion_or_risky_action"},
+            "Whistleblower Leak Occurs",
+            `A potential whistleblower leak has occurred at ${spawnLocationHexId}.`,
+            durationTicks
+        ),
+        parameters: data,
+        targetId: spawnLocationHexId, // The location of the leak event itself
     };
 }
 
