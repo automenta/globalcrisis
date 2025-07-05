@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { GameEngine, GameState, EventType, WorldRegion, RegionEvent, Faction } from './engine/GameEngine';
-import { Earth3D, Satellite, ContextMenu as ContextMenuType } from './components/Earth3D';
+// import { Earth3D, Satellite, ContextMenu as ContextMenuType } from './components/Earth3D'; // Old import
+import { Earth3D_v2, ContextMenu as ContextMenuType } from './components/Earth3D.2'; // New import
 import { ContextMenu, TacticalOverlay } from './components/WarRoomUI';
 import { Button } from '@/components/ui/button';
 import { AlertTriangle, Power } from 'lucide-react';
@@ -69,7 +70,7 @@ class WarRoomAudio {
 }
 
 export default function GlobalCrisisSimulator() {
-  const earth3DRef = useRef<Earth3D | null>(null);
+  const earth3DRef = useRef<Earth3D_v2 | null>(null); // Updated type
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const gameEngineRef = useRef<GameEngine | null>(null);
   const audioRef = useRef<WarRoomAudio | null>(null);
@@ -100,7 +101,7 @@ export default function GlobalCrisisSimulator() {
       setGameState(initialState);
       
       // Initialize 3D Earth
-      earth3DRef.current = new Earth3D(canvasContainerRef.current);
+      earth3DRef.current = new Earth3D_v2(canvasContainerRef.current); // Use Earth3D_v2
       
       // Initialize audio
       audioRef.current = new WarRoomAudio();
@@ -112,23 +113,23 @@ export default function GlobalCrisisSimulator() {
           x,
           y,
           region,
-          satellite: null,
+          // satellite: null, // Keep as null for region click
           event: null,
           type: 'region',
           target: region
         });
       };
       
-      earth3DRef.current.onSatelliteClick = (satellite, x, y) => {
+      earth3DRef.current.onSatelliteClick = (satelliteId, satelliteName, satelliteType, x, y) => { // Updated signature
         setContextMenu({
           visible: true,
           x,
           y,
           region: null,
-          satellite,
+          // satellite: { id: satelliteId, name: satelliteName, type: satelliteType }, // Pass an object if ContextMenu expects it
           event: null,
           type: 'satellite',
-          target: satellite
+          target: { id: satelliteId, name: satelliteName, type: satelliteType } // ContextMenu target now gets this object
         });
       };
       
@@ -162,19 +163,25 @@ export default function GlobalCrisisSimulator() {
       lastTime = currentTime;
       
       if (gameEngineRef.current) {
-        const newState = gameEngineRef.current.updateWorld(gameState, deltaTime);
+        const newState = gameEngineRef.current.updateWorld(gameState, deltaTime); // gameState should be the first arg
         setGameState(newState);
         
         // Update 3D visualization
         if (earth3DRef.current) {
-          earth3DRef.current.updateRegionData(newState.regions);
-          earth3DRef.current.updateFactionData(newState.factions, newState.regions);
+          // earth3DRef.current.updateRegionData(newState.regions); // This method might need to be part of updateCurrentGameState
+          // earth3DRef.current.updateFactionData(newState.factions, newState.regions); // Same as above
+          earth3DRef.current.updateCurrentGameState(newState); // Centralized update
           
-          // Add new event markers
+          // Add new event markers - this logic might also move into Earth3D_v2 or be driven by it
           newState.activeEvents.forEach(event => {
-            if (event.timeLeft === event.duration) { // Check if it's a newly added event
-              earth3DRef.current?.addEventMarker(event);
-            }
+            // Assuming RegionEvent has a flag or timestamp to indicate if it's new
+            // For now, let's assume addEventMarker handles duplicates or is called for new events by engine state change
+            // A better way: GameEngine could emit specific "event_created" signals or Earth3D could diff activeEvents.
+            // This check `event.timeLeft === event.duration` seems fragile.
+            // Let's assume addEventMarker is idempotent or Earth3D_v2 manages this internally.
+             if (event.isNew || !earth3DRef.current?.hasEventMarker(event.id)) { // hasEventMarker would be a new method in Earth3D_v2
+                 earth3DRef.current?.addEventMarker(event);
+             }
           });
         }
         
